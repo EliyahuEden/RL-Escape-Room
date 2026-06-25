@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import List
 
 import streamlit as st
-from matplotlib.patches import Circle, Rectangle
+from matplotlib.patches import Circle, Polygon, Rectangle
 
 from rl.algos import dqn
 from rl.envs.football import FootballEnv
-from ui.common import learning_section, replay_player, train_with_live_progress
+from ui.common import episode_replay_player, learning_section, train_with_live_progress
 from ui.render import field_axes
 
 HIDDEN_CHOICES = {"64, 64": (64, 64), "128, 128": (128, 128), "256, 128": (256, 128)}
@@ -28,15 +28,29 @@ def _draw(env: FootballEnv, frame: dict):
     kx, ky = frame["keeper"]
     ax.add_patch(Rectangle((kx - 0.15, ky - env.keeper_reach), 0.3, 2 * env.keeper_reach,
                            facecolor="#ffeb3b", edgecolor="#333", zorder=4))
+    ax.text(kx, ky, "GK", ha="center", va="center", fontsize=8, fontweight="bold",
+            color="#111", zorder=8)
+    ax.add_patch(Circle((kx, ky - env.keeper_reach), 0.09, facecolor="#111", edgecolor="none", zorder=8))
+    ax.add_patch(Circle((kx, ky + env.keeper_reach), 0.09, facecolor="#111", edgecolor="none", zorder=8))
     # defenders
     for dx, dy in frame.get("defenders", []):
         ax.add_patch(Circle((dx, dy), 0.3, facecolor="#e53935", edgecolor="#7a0000", zorder=4))
+        ax.plot([dx - 0.16, dx + 0.16], [dy - 0.08, dy + 0.08],
+                color="white", lw=2, zorder=8)
     # player
     px, py = frame["x"], frame["y"]
     ax.add_patch(Circle((px, py), 0.3, facecolor="#1e88e5", edgecolor="#fff", lw=1.5, zorder=5))
+    ax.add_patch(Circle((px, py - 0.1), 0.08, facecolor="#bbdefb", edgecolor="#0d47a1", lw=0.8, zorder=8))
+    ax.plot([px, px], [py - 0.02, py + 0.16], color="white", lw=1.8, zorder=8)
+    ax.plot([px, px - 0.14], [py + 0.05, py + 0.18], color="white", lw=1.8, zorder=8)
+    ax.plot([px, px + 0.14], [py + 0.05, py + 0.17], color="white", lw=1.8, zorder=8)
     # ball (separate entity)
     bx, by = frame.get("ball", (px, py))
     ax.add_patch(Circle((bx, by), 0.16, facecolor="white", edgecolor="#222", lw=1.2, zorder=7))
+    ax.add_patch(Polygon([(bx, by - 0.06), (bx + 0.055, by - 0.02),
+                          (bx + 0.035, by + 0.055), (bx - 0.035, by + 0.055),
+                          (bx - 0.055, by - 0.02)],
+                         closed=True, facecolor="#222", edgecolor="none", zorder=9))
     # dribble velocity arrow
     if not frame.get("ball_in_flight") and (frame.get("vx") or frame.get("vy")):
         ax.arrow(px, py, frame["vx"] * 0.6, frame["vy"] * 0.6, head_width=0.18,
@@ -95,9 +109,12 @@ def render() -> None:
         keeper_speed = st.slider("Keeper patrol speed (m/s)", 0.5, 4.0, 1.5, 0.25)
         train = st.button("🧠 Train DQN", type="primary", use_container_width=True)
 
+    env_config = dict(n_defenders=n_def, def_speed=def_speed,
+                      keeper_speed=keeper_speed, max_steps=max_steps,
+                      seed=int(seed))
+
     def make_env():
-        return FootballEnv(n_defenders=n_def, def_speed=def_speed,
-                           keeper_speed=keeper_speed, max_steps=max_steps)
+        return FootballEnv(**env_config)
 
     env = make_env()
     left, right = st.columns([1, 1])
@@ -116,9 +133,15 @@ def render() -> None:
                                  progress_cb=cb),
             update_every=10,
         )
-        st.session_state["room4"] = result
+        st.session_state["room4"] = {"result": result, "env_config": env_config}
 
-    result = st.session_state.get("room4")
+    store = st.session_state.get("room4")
+    if isinstance(store, dict) and "result" in store:
+        result = store["result"]
+        trained_env = FootballEnv(**store["env_config"])
+    else:
+        result = store
+        trained_env = env
     with right:
         st.subheader("Result")
         if not result:
@@ -133,7 +156,11 @@ def render() -> None:
     if result:
         st.subheader("📈 Learning graphs")
         learning_section(result)
-        st.subheader("🎬 Replay — watch the ball fly")
-        snaps = {k: _expand_flight(v) for k, v in result.snapshots.items()}
-        replay_player(snaps, lambda f: _draw(env, f), key="room4",
-                      caption="Early vs Mid vs Final greedy policy — the kick animates the ball flight.")
+        st.subheader("🎞️ Replay any training episode")
+        episode_replay_player(
+            result,
+            lambda f: _draw(trained_env, f),
+            key="room4_all_episodes",
+            caption="Pick any DQN training episode; exploratory shots include the animated ball flight.",
+            frame_transform=_expand_flight,
+        )

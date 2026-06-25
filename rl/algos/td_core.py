@@ -72,6 +72,7 @@ def train(
     max_steps: int = 200,
     seed: Optional[int] = 0,
     progress_cb: Optional[Callable] = None,
+    record_replays: bool = True,
     snapshot_fracs=(0.05, 0.5, 1.0),
     snapshot_labels=("Early", "Mid", "Final"),
 ) -> TrainResult:
@@ -92,7 +93,13 @@ def train(
         state = env.reset()
         action = eps_greedy(Q[state], eps, rng)
         done, total, steps, td_abs = False, 0.0, 0, 0.0
+        info = {}
+        frames = []
+        if record_replays:
+            frames.append(dict(env.render_state(), step=0, reward=0.0,
+                               cum_reward=0.0, done=False, epsilon=eps))
         while not done and steps < max_steps:
+            action_taken = action
             nstate, reward, done, info = env.step(action)
             if algo == "sarsa":
                 naction = eps_greedy(Q[nstate], eps, rng)
@@ -106,8 +113,14 @@ def train(
             state, action = nstate, naction
             total += reward
             steps += 1
+            if record_replays:
+                frames.append(dict(env.render_state(), step=steps, reward=reward,
+                                   cum_reward=total, done=done, action=action_taken,
+                                   epsilon=eps, **info))
 
         result.log_episode(total, steps, bool(info.get("success", False)), eps)
+        if record_replays:
+            result.episode_replays.append(frames)
         result.extra["mean |TD error|"].append(td_abs / max(steps, 1))
 
         if (ep + 1) in milestones:

@@ -32,17 +32,71 @@ Cell = Tuple[int, int]
 # in ~18 steps. Q-Learning chases the short-cut; raise the oil penalty / slip and
 # it grows more cautious. Watch both lines with the SARSA-vs-Q race below.
 DEFAULT_LAYOUT = [
-    "SBB.......",
+    "S.B..O...B",
     "#####O###.",
-    "..........",
+    "..M.......",
     ".####O####",
-    "..........",
+    "..B.......",
     "#####M###.",
-    "..........",
+    "...O...B..",
     ".####M####",
+    "..M..O....",
+    "#########F",
+]
+
+RACING_BASE_LAYOUT = [
+    "S.........",
+    "#####.###.",
+    "..........",
+    ".####.####",
+    "..........",
+    "#####.###.",
+    "..........",
+    ".####.####",
     "..........",
     "#########F",
 ]
+
+
+def _put(layout: List[List[str]], cell: Cell, ch: str) -> None:
+    layout[cell[0]][cell[1]] = ch
+
+
+def generate_racing_layout(
+    seed: int = 0,
+    n_oil: int = 5,
+    n_mud: int = 4,
+    n_boosters: int = 4,
+) -> List[str]:
+    """Generate a connected racing track with random hazards and boosters."""
+    rng = random.Random(seed)
+    layout = [list(row) for row in RACING_BASE_LAYOUT]
+    reserved = {(0, 0), (9, 9)}
+    track = [
+        (r, c)
+        for r, row in enumerate(layout)
+        for c, ch in enumerate(row)
+        if ch == "." and (r, c) not in reserved
+    ]
+    shortcut = [c for c in track if c[1] == 5 and c[0] not in (0, 9)]
+    oil_pool = shortcut + [c for c in track if c not in shortcut]
+    oil = rng.sample(oil_pool, k=min(n_oil, len(oil_pool)))
+    used = set(oil) | reserved
+    for cell in oil:
+        _put(layout, cell, "O")
+
+    mud_pool = [c for c in track if c not in used and c[0] >= 2]
+    mud = rng.sample(mud_pool, k=min(n_mud, len(mud_pool)))
+    used.update(mud)
+    for cell in mud:
+        _put(layout, cell, "M")
+
+    boost_pool = [c for c in track if c not in used]
+    boosters = rng.sample(boost_pool, k=min(n_boosters, len(boost_pool)))
+    for cell in boosters:
+        _put(layout, cell, "B")
+
+    return ["".join(row) for row in layout]
 
 
 class RacingEnv:

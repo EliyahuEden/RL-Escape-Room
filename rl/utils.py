@@ -36,9 +36,9 @@ class TrainResult:
     """Everything the UI needs after training a room.
 
     The per-episode lists power the *learning* and *exploration* graphs; the
-    ``snapshots`` map labels such as ``"Early"`` / ``"Mid"`` / ``"Final"`` to a
-    recorded trajectory so the user can replay what the policy looked like at
-    different stages of training.
+    ``episode_replays`` stores the actual trajectory from every training
+    episode. ``snapshots`` keeps labelled greedy checkpoints such as
+    ``"Early"`` / ``"Mid"`` / ``"Final"`` for quick comparison.
     """
 
     episode_rewards: List[float] = field(default_factory=list)
@@ -49,6 +49,8 @@ class TrainResult:
     extra: Dict[str, List[float]] = field(default_factory=dict)
     # label -> trajectory (list of frame dicts)
     snapshots: Dict[str, List[dict]] = field(default_factory=dict)
+    # episode index -> actual training trajectory (list of frame dicts)
+    episode_replays: List[List[dict]] = field(default_factory=list)
     # final artefact: a greedy policy table, Q-table or trained agent
     policy: Any = None
     info: Dict[str, Any] = field(default_factory=dict)

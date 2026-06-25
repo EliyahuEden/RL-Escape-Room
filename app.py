@@ -20,6 +20,7 @@ a problem in one room never prevents the others from loading.
 from __future__ import annotations
 
 import importlib
+import sys
 import traceback
 
 import streamlit as st
@@ -35,6 +36,11 @@ ROOMS = {
     "⚽ Room 4 — Football · DQN": "ui.room4_football",
     "🚧 Room 5 — Obstacles · DQN + sensors": "ui.room5_obstacles",
 }
+
+SHARED_MODULES = [
+    "ui.render",
+    "ui.common",
+]
 
 
 def overview() -> None:
@@ -78,6 +84,9 @@ def main() -> None:
         return
 
     try:
+        for shared_module in SHARED_MODULES:
+            if shared_module in sys.modules:
+                importlib.reload(sys.modules[shared_module])
         module = importlib.import_module(module_path)
         importlib.reload(module)  # pick up edits during development
         module.render()

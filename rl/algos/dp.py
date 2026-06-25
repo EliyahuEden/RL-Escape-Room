@@ -17,7 +17,7 @@ per-iteration diagnostic series used for the "learning"/convergence graphs:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Hashable, List, Tuple
+from typing import Callable, Dict, Hashable, List, Optional, Tuple
 
 State = Hashable
 Transition = Tuple[float, State, float, bool]  # prob, next_state, reward, terminal
@@ -53,7 +53,8 @@ def greedy_policy(mdp: TabularMDP, V: Dict[State, float], gamma: float) -> Dict[
 
 
 def value_iteration(mdp: TabularMDP, gamma: float = 0.95, theta: float = 1e-4,
-                    max_iter: int = 1000):
+                    max_iter: int = 1000,
+                    iteration_cb: Optional[Callable[[int, Dict[State, float], Dict[State, int]], None]] = None):
     """Classic value iteration. Returns ``(V, policy, diagnostics)``."""
     V = {s: 0.0 for s in mdp.states}
     diag = {"value_delta": [], "start_value": [], "policy_changes": []}
@@ -73,6 +74,8 @@ def value_iteration(mdp: TabularMDP, gamma: float = 0.95, theta: float = 1e-4,
             diag["policy_changes"].append(
                 sum(1 for s in mdp.states if policy[s] != prev_policy[s])
             )
+        if iteration_cb is not None:
+            iteration_cb(len(diag["value_delta"]), V, policy)
         prev_policy = policy
         if delta < theta:
             break
@@ -96,7 +99,8 @@ def policy_evaluation(mdp: TabularMDP, policy: Dict[State, int], gamma: float,
 
 
 def policy_iteration(mdp: TabularMDP, gamma: float = 0.95, theta: float = 1e-4,
-                     max_iter: int = 200):
+                     max_iter: int = 200,
+                     iteration_cb: Optional[Callable[[int, Dict[State, float], Dict[State, int]], None]] = None):
     """Policy iteration (evaluation + greedy improvement). Returns ``(V, policy, diag)``."""
     import random
 
@@ -111,6 +115,8 @@ def policy_iteration(mdp: TabularMDP, gamma: float = 0.95, theta: float = 1e-4,
         diag["start_value"].append(V[mdp.start])
         diag["value_delta"].append(float(changes))  # proxy residual: 0 when stable
         policy = new_policy
+        if iteration_cb is not None:
+            iteration_cb(len(diag["value_delta"]), V, policy)
         if changes == 0:
             break
     return V, policy, diag

@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import time
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional, Sequence
 
 import pandas as pd
 import streamlit as st
@@ -118,3 +118,80 @@ def replay_player(
             time.sleep(0.08)
     else:
         show(idx)
+
+
+def sequence_replay_player(
+    trajectories: Sequence[List[dict]],
+    draw_fn: Callable[[dict], object],
+    key: str,
+    item_label: str = "Episode",
+    caption: str = "",
+    frame_transform: Optional[Callable[[List[dict]], List[dict]]] = None,
+    metrics: Optional[Callable[[int], str]] = None,
+) -> None:
+    """Replay any indexed sequence of trajectories with an item and step slider."""
+    if not trajectories:
+        st.info("Train the room first to record replay episodes.")
+        return
+    if caption:
+        st.caption(caption)
+
+    item_idx = st.slider(item_label, 1, len(trajectories), len(trajectories), key=f"{key}_item") - 1
+    if metrics is not None:
+        st.caption(metrics(item_idx))
+
+    traj = trajectories[item_idx]
+    if frame_transform is not None:
+        traj = frame_transform(traj)
+    if not traj:
+        st.warning(f"This {item_label.lower()} has no frames.")
+        return
+
+    last = len(traj) - 1
+    idx = st.slider("Step", 0, last, last, key=f"{key}_step")
+    placeholder = st.empty()
+    info = st.empty()
+
+    def show(i: int) -> None:
+        frame = traj[i]
+        placeholder.pyplot(draw_fn(frame), clear_figure=True)
+        msg = f"{item_label} {item_idx + 1}/{len(trajectories)} · Step {i}/{last}"
+        if "reward" in frame:
+            msg += f" · step reward {frame['reward']:+.1f}"
+        if "cum_reward" in frame:
+            msg += f" · cumulative {frame['cum_reward']:+.1f}"
+        info.write(msg)
+
+    if st.button(f"▶ Animate {item_label.lower()}", key=f"{key}_play"):
+        for i in range(len(traj)):
+            show(i)
+            time.sleep(0.08)
+    else:
+        show(idx)
+
+
+def episode_replay_player(
+    result: TrainResult,
+    draw_fn: Callable[[dict], object],
+    key: str,
+    caption: str = "",
+    frame_transform: Optional[Callable[[List[dict]], List[dict]]] = None,
+) -> None:
+    """Replay the actual trajectory from any training episode."""
+
+    def metric_line(i: int) -> str:
+        reward = result.episode_rewards[i] if i < len(result.episode_rewards) else 0.0
+        steps = result.episode_steps[i] if i < len(result.episode_steps) else 0
+        success = result.episode_success[i] if i < len(result.episode_success) else False
+        eps = result.epsilon[i] if i < len(result.epsilon) else 0.0
+        return f"Reward {reward:+.1f} · steps {steps} · success {success} · ε {eps:.3f}"
+
+    sequence_replay_player(
+        result.episode_replays,
+        draw_fn,
+        key,
+        item_label="Episode",
+        caption=caption,
+        frame_transform=frame_transform,
+        metrics=metric_line,
+    )

@@ -108,6 +108,7 @@ def train(
     seed: Optional[int] = 0,
     device: str = "cpu",
     progress_cb: Optional[Callable] = None,
+    record_replays: bool = True,
     snapshot_fracs=(0.1, 0.5, 1.0),
     snapshot_labels=("Early", "Mid", "Final"),
 ) -> TrainResult:
@@ -138,8 +139,13 @@ def train(
     for ep in range(episodes):
         obs = env.reset()
         done, total, steps, loss_accum, n_updates = False, 0.0, 0, 0.0, 0
+        info = {}
         # ε decays per episode, so very short episodes don't stall exploration
         eps = max(eps_end, eps_start - (eps_start - eps_end) * ep / decay_episodes)
+        frames = []
+        if record_replays:
+            frames.append(dict(env.render_state(), step=0, reward=0.0,
+                               cum_reward=0.0, done=False, epsilon=eps))
         while not done and steps < max_steps:
             if rng.random() < eps:
                 action = rng.randrange(nA)
@@ -153,6 +159,10 @@ def train(
             total += reward
             steps += 1
             global_step += 1
+            if record_replays:
+                frames.append(dict(env.render_state(), step=steps, reward=reward,
+                                   cum_reward=total, done=done, action=action,
+                                   epsilon=eps, **info))
 
             if len(buffer) >= learn_start and global_step % train_freq == 0:
                 bo, ba, br, bno, bd = buffer.sample(batch_size)
@@ -177,6 +187,8 @@ def train(
                     target.load_state_dict(online.state_dict())
 
         result.log_episode(total, steps, bool(info.get("success", False)), eps)
+        if record_replays:
+            result.episode_replays.append(frames)
         result.extra["training loss"].append(loss_accum / max(n_updates, 1))
 
         if (ep + 1) in milestones:

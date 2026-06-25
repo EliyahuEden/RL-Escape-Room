@@ -7,34 +7,40 @@ from typing import Dict
 import streamlit as st
 
 from rl.algos import sarsa
-from rl.envs.museum import LAYOUTS, MuseumEnv
-from ui.common import learning_section, replay_player, train_with_live_progress
+from rl.envs.museum import LAYOUTS, MuseumEnv, generate_museum_layout
+from ui.common import episode_replay_player, learning_section, train_with_live_progress
 from ui.render import render_grid
 
 
 def _draw(env: MuseumEnv, frame: dict):
     styles: Dict = {}
     for cell in env.slippery:
-        styles[cell] = {"color": "#bfe3ff", "label": "❄", "label_color": "#1565c0"}
+        styles[cell] = {"color": "#bfe3ff", "icon": "ice", "label_color": "#1565c0"}
     for cell in env.cameras:
-        styles[cell] = {"color": "#ff9aa2", "label": "📷", "label_color": "#7a0000"}
+        styles[cell] = {"color": "#ff9aa2", "icon": "camera", "label_color": "#7a0000"}
     for cell in env.traps:
-        styles[cell] = {"color": "#ffd9a0", "label": "⚠", "label_color": "#7a4a00"}
-    styles[env.start] = {"color": "#d7f0d7", "label": "S", "label_color": "#2e7d32"}
+        styles[cell] = {"color": "#ffd9a0", "icon": "trap", "label_color": "#7a4a00"}
+    styles[env.start] = {"color": "#d7f0d7", "icon": "home", "label_color": "#2e7d32"}
     has_d = frame.get("has_diamond", 0)
     styles[env.exit] = {"color": "#7CFC00" if has_d else "#d9a441",
-                        "label": "EXIT", "label_color": "#222"}
+                        "icon": "door", "label_color": "#222"}
     if not has_d:
-        styles[env.diamond] = {"color": "#fff3b0", "label": "💎", "label_color": "#b8860b"}
+        styles[env.diamond] = {"color": "#fff3b0", "icon": "diamond", "label_color": "#0369a1"}
 
     markers = []
     if has_d:
-        markers.append((frame["pos"], "💎", "#b8860b"))
+        markers.append((frame["pos"], "diamond", "#0369a1"))
+    for guard in frame.get("guards", []):
+        markers.append((guard, "police", "#1565c0"))
     title = "Diamond: ✓ — escaping" if has_d else "Diamond: ✗ — go steal it"
     if frame.get("success"):
-        title = "🏆 Clean getaway!"
+        title = "Clean getaway!"
+    if frame.get("guard_hit"):
+        title = "Caught by a guard"
     return render_grid(env.rows, env.cols, walls=env.walls, cell_styles=styles,
-                       agent=frame["pos"], agent_color="#2b2b2b", markers=markers,
+                       agent=frame["pos"], agent_color="#2b2b2b",
+                       agent_symbol="robber", agent_symbol_color="#f5f5f5",
+                       markers=markers,
                        title=title)
 
 
@@ -49,9 +55,10 @@ def render() -> None:
 
     with st.sidebar:
         st.header("⚙️ SARSA parameters")
-        layout_name = st.selectbox("Layout", list(LAYOUTS), index=0)
-        layout = LAYOUTS[layout_name]
-        hard = layout_name.startswith("Museum maze")
+        map_mode = st.selectbox("Map source", ["Generated", "Fixed layout"], key="room2_map_mode")
+        layout_name = st.selectbox("Fixed layout", list(LAYOUTS), index=0,
+                                   disabled=map_mode == "Generated")
+        hard = map_mode == "Generated" or layout_name.startswith("Museum maze")
         episodes = st.slider("Episodes", 100, 4000, 1500 if hard else 800, 100)
         alpha = st.slider("Learning rate α", 0.01, 1.0, 0.2, 0.01)
         gamma = st.slider("Discount γ", 0.50, 0.999, 0.97 if hard else 0.95, 0.005)
@@ -61,36 +68,60 @@ def render() -> None:
         slip_prob = st.slider("Slip probability", 0.0, 0.4, 0.05, 0.05)
         max_steps = st.slider("Max steps / episode", 50, 500, 200, 50)
         seed = st.number_input("Random seed", value=1, step=1)
+        st.header("Map difficulty")
+        map_seed = st.number_input("Map seed", value=21, step=1, key="room2_map_seed")
+        n_cameras = st.slider("Camera cells", 0, 18, 10, disabled=map_mode != "Generated")
+        n_traps = st.slider("Traps", 0, 8, 3, disabled=map_mode != "Generated")
+        n_slippery = st.slider("Slippery tiles", 0, 18, 7, disabled=map_mode != "Generated")
+        n_guards = st.slider("Patrol guards", 0, 5, 2, disabled=map_mode != "Generated")
         with st.expander("Reward shaping"):
             r_diamond = st.number_input("Diamond", value=30.0, step=5.0)
             r_exit = st.number_input("Exit", value=100.0, step=10.0)
             r_camera = st.number_input("Camera (alarm)", value=-25.0, step=5.0)
             r_trap = st.number_input("Trap", value=-20.0, step=5.0)
+            r_guard = st.number_input("Guard catch", value=-35.0, step=5.0)
             r_step = st.number_input("Step cost", value=-1.0, step=1.0)
             r_slip = st.number_input("Slip", value=-5.0, step=1.0)
         train = st.button("🎓 Train SARSA", type="primary", use_container_width=True)
 
-    env = MuseumEnv(layout=layout, slip_prob=slip_prob, max_steps=max_steps,
-                    r_step=r_step, r_diamond=r_diamond, r_exit=r_exit,
-                    r_camera=r_camera, r_trap=r_trap, r_slip=r_slip)
+    layout = (
+        generate_museum_layout(int(map_seed), n_cameras, n_traps, n_slippery, n_guards)
+        if map_mode == "Generated"
+        else LAYOUTS[layout_name]
+    )
+    env_config = dict(layout=layout, slip_prob=slip_prob, max_steps=max_steps,
+                      r_step=r_step, r_diamond=r_diamond, r_exit=r_exit,
+                      r_camera=r_camera, r_trap=r_trap, r_guard=r_guard,
+                      r_slip=r_slip, seed=int(seed))
+
+    def make_env() -> MuseumEnv:
+        return MuseumEnv(**env_config)
+
+    env = make_env()
 
     left, right = st.columns([1, 1])
     with left:
         st.subheader("Museum")
-        st.pyplot(_draw(env, {"pos": env.start, "has_diamond": 0}), clear_figure=True)
+        st.pyplot(_draw(env, env.render_state()), clear_figure=True)
         st.caption(f"{len(env.cameras)} camera cells · {len(env.traps)} trap(s) · "
-                   f"{len(env.slippery)} icy cells")
+                   f"{len(env.slippery)} icy cells · {len(env.guard_starts)} patrol guard(s)")
 
     if train:
         result = train_with_live_progress(
-            lambda cb: sarsa.train(env, episodes=episodes, alpha=alpha, gamma=gamma,
+            lambda cb: sarsa.train(make_env(), episodes=episodes, alpha=alpha, gamma=gamma,
                                    eps_start=eps_start, eps_end=eps_end,
                                    eps_decay=eps_decay, max_steps=max_steps,
                                    seed=int(seed), progress_cb=cb)
         )
-        st.session_state["room2"] = result
+        st.session_state["room2"] = {"result": result, "env_config": env_config}
 
-    result = st.session_state.get("room2")
+    store = st.session_state.get("room2")
+    if isinstance(store, dict) and "result" in store:
+        result = store["result"]
+        trained_env = MuseumEnv(**store["env_config"])
+    else:
+        result = store
+        trained_env = env
     with right:
         st.subheader("Result")
         if not result:
@@ -107,6 +138,10 @@ def render() -> None:
     if result:
         st.subheader("📈 Learning & exploration graphs")
         learning_section(result)
-        st.subheader("🎬 Replay episodes from different training stages")
-        replay_player(result.snapshots, lambda f: _draw(env, f), key="room2",
-                      caption="Early vs Mid vs Final greedy policy.")
+        st.subheader("🎞️ Replay any training episode")
+        episode_replay_player(
+            result,
+            lambda f: _draw(trained_env, f),
+            key="room2_all_episodes",
+            caption="Pick any SARSA training episode, including exploratory failures and successful runs.",
+        )

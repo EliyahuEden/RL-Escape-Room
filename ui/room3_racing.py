@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import time
 from typing import Dict
 
 import pandas as pd
 import streamlit as st
 
 from rl.algos import qlearning, sarsa
-from rl.envs.racing import RacingEnv
-from ui.common import learning_section, replay_player, train_with_live_progress
+from rl.envs.racing import DEFAULT_LAYOUT, RacingEnv, generate_racing_layout
+from ui.common import episode_replay_player, learning_section, train_with_live_progress
 from ui.render import render_grid
 from rl.utils import moving_average
 
@@ -18,28 +17,30 @@ from rl.utils import moving_average
 def _draw(env: RacingEnv, frame: dict):
     styles: Dict = {}
     for cell in env.oil:
-        styles[cell] = {"color": "#444", "label": "🛢", "label_color": "#ffd"}
+        styles[cell] = {"color": "#444", "icon": "oil", "label_color": "#111"}
     for cell in env.mud:
-        styles[cell] = {"color": "#8d6e63", "label": "M", "label_color": "#fff"}
+        styles[cell] = {"color": "#8d6e63", "icon": "mud", "label_color": "#795548"}
     for cell in env.remaining_boosters(frame.get("bmask", 0)):
-        styles[cell] = {"color": "#80deea", "label": "»", "label_color": "#006064"}
-    styles[env.start] = {"color": "#d7f0d7", "label": "S", "label_color": "#2e7d32"}
-    styles[env.finish] = {"color": "#7CFC00", "label": "🏁", "label_color": "#222"}
-    title = "🏁 Finished!" if frame.get("success") else "On the track"
+        styles[cell] = {"color": "#80deea", "icon": "boost", "label_color": "#f57f17"}
+    styles[env.start] = {"color": "#d7f0d7", "icon": "flag", "label_color": "#2e7d32"}
+    styles[env.finish] = {"color": "#7CFC00", "icon": "flag", "label_color": "#222"}
+    title = "Finished!" if frame.get("success") else "On the track"
     return render_grid(env.rows, env.cols, walls=env.walls, cell_styles=styles,
-                       agent=frame["pos"], agent_color="#e53935", title=title)
+                       agent=frame["pos"], agent_color="#e53935",
+                       agent_symbol="car", agent_symbol_color="#fff",
+                       title=title)
 
 
 def _track_styles(env: RacingEnv) -> Dict:
     styles: Dict = {}
     for cell in env.oil:
-        styles[cell] = {"color": "#444", "label": "🛢", "label_color": "#ffd"}
+        styles[cell] = {"color": "#444", "icon": "oil", "label_color": "#111"}
     for cell in env.mud:
-        styles[cell] = {"color": "#8d6e63", "label": "M", "label_color": "#fff"}
+        styles[cell] = {"color": "#8d6e63", "icon": "mud", "label_color": "#795548"}
     for cell in env.boosters:
-        styles[cell] = {"color": "#80deea", "label": "»", "label_color": "#006064"}
-    styles[env.start] = {"color": "#d7f0d7", "label": "S", "label_color": "#2e7d32"}
-    styles[env.finish] = {"color": "#7CFC00", "label": "🏁", "label_color": "#222"}
+        styles[cell] = {"color": "#80deea", "icon": "boost", "label_color": "#f57f17"}
+    styles[env.start] = {"color": "#d7f0d7", "icon": "flag", "label_color": "#2e7d32"}
+    styles[env.finish] = {"color": "#7CFC00", "icon": "flag", "label_color": "#222"}
     return styles
 
 
@@ -47,28 +48,7 @@ def _draw_race(env: RacingEnv, qf: dict, sf: dict):
     """Draw both cars on the same track: 🔴 Q-Learning, 🔵 SARSA."""
     markers = [(qf["pos"], "Q", "#e53935"), (sf["pos"], "S", "#1565c0")]
     return render_grid(env.rows, env.cols, walls=env.walls, cell_styles=_track_styles(env),
-                       agent=None, markers=markers, title="🏁 Q (red) vs SARSA (blue)")
-
-
-def _race_player(env: RacingEnv, qtraj, straj) -> None:
-    n = max(len(qtraj), len(straj))
-    qsteps, ssteps = qtraj[-1]["step"], straj[-1]["step"]
-    winner = "🔴 Q-Learning" if qsteps < ssteps else ("🔵 SARSA" if ssteps < qsteps else "Tie")
-    st.caption(f"🔴 Q-Learning finishes in **{qsteps}** steps · 🔵 SARSA in **{ssteps}** · "
-               f"winner: **{winner}** (each car holds at the finish line)")
-    ph = st.empty()
-
-    def show(i: int) -> None:
-        qf = qtraj[min(i, len(qtraj) - 1)]
-        sf = straj[min(i, len(straj) - 1)]
-        ph.pyplot(_draw_race(env, qf, sf), clear_figure=True)
-
-    if st.button("▶ Start race", key="room3_race_go"):
-        for i in range(n):
-            show(i)
-            time.sleep(0.12)
-    else:
-        show(st.slider("Race step", 0, n - 1, 0, key="room3_race_step"))
+                       agent=None, markers=markers, title="Q (red) vs SARSA (blue)")
 
 
 def render() -> None:
@@ -93,6 +73,12 @@ def render() -> None:
         max_steps = st.slider("Max steps / episode", 50, 500, 300, 50)
         seed = st.number_input("Random seed", value=2, step=1)
         compare = st.checkbox("Also train SARSA for comparison", value=False)
+        st.header("Map difficulty")
+        map_mode = st.selectbox("Map source", ["Generated", "Fixed layout"], key="room3_map_mode")
+        map_seed = st.number_input("Map seed", value=31, step=1, key="room3_map_seed")
+        n_oil = st.slider("Oil tiles", 0, 12, 6, disabled=map_mode != "Generated")
+        n_mud = st.slider("Mud tiles", 0, 12, 5, disabled=map_mode != "Generated")
+        n_boosters = st.slider("Boosters", 0, 8, 4, disabled=map_mode != "Generated")
         with st.expander("Reward shaping"):
             r_finish = st.number_input("Finish", value=100.0, step=10.0)
             r_boost = st.number_input("Booster", value=15.0, step=5.0)
@@ -102,10 +88,18 @@ def render() -> None:
             r_step = st.number_input("Step cost", value=-1.0, step=1.0)
         train = st.button("🏁 Train", type="primary", use_container_width=True)
 
+    layout = (
+        generate_racing_layout(int(map_seed), n_oil, n_mud, n_boosters)
+        if map_mode == "Generated"
+        else DEFAULT_LAYOUT
+    )
+    env_config = dict(layout=layout, slip_prob=slip_prob, max_steps=max_steps,
+                      r_step=r_step, r_finish=r_finish, r_boost=r_boost,
+                      r_mud=r_mud, r_oil=r_oil, r_offtrack=r_offtrack,
+                      seed=int(seed))
+
     def make_env():
-        return RacingEnv(slip_prob=slip_prob, max_steps=max_steps, r_step=r_step,
-                         r_finish=r_finish, r_boost=r_boost, r_mud=r_mud, r_oil=r_oil,
-                         r_offtrack=r_offtrack)
+        return RacingEnv(**env_config)
 
     env = make_env()
     left, right = st.columns([1, 1])
@@ -125,9 +119,10 @@ def render() -> None:
         if compare:
             st.caption("Training SARSA…")
             res_s = train_with_live_progress(lambda cb: sarsa.train(make_env(), progress_cb=cb, **common))
-        st.session_state["room3"] = {"q": res_q, "sarsa": res_s}
+        st.session_state["room3"] = {"q": res_q, "sarsa": res_s, "env_config": env_config}
 
     store = st.session_state.get("room3")
+    trained_env = RacingEnv(**store["env_config"]) if store and "env_config" in store else env
     with right:
         st.subheader("Result")
         if not store:
@@ -167,16 +162,17 @@ def render() -> None:
         else:
             learning_section(res_q)
 
+        st.subheader("🎞️ Replay any training episode")
+        episode_replay_player(
+            res_q,
+            lambda f: _draw(trained_env, f),
+            key="room3_q_all_episodes",
+            caption="Q-Learning: pick any training episode and animate the actual exploratory lap.",
+        )
         if store["sarsa"]:
-            st.subheader("🏁 Race — watch both learned policies run together")
-            qtraj = res_q.snapshots.get("Final", [])
-            straj = store["sarsa"].snapshots.get("Final", [])
-            if qtraj and straj:
-                _race_player(env, qtraj, straj)
-
-        st.subheader("🎬 Replay")
-        snaps = {f"Q-Learning · {k}": v for k, v in res_q.snapshots.items()}
-        if store["sarsa"]:
-            snaps.update({f"SARSA · {k}": v for k, v in store["sarsa"].snapshots.items()})
-        replay_player(snaps, lambda f: _draw(env, f), key="room3",
-                      caption="Compare the racing lines learned at each stage / by each algorithm.")
+            episode_replay_player(
+                store["sarsa"],
+                lambda f: _draw(trained_env, f),
+                key="room3_sarsa_all_episodes",
+                caption="SARSA comparison: replay any training episode on the same track.",
+            )
