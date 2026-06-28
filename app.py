@@ -11,7 +11,7 @@ reinforcement-learning algorithm:
     Room 2  Museum Heist    SARSA                 (on-policy, cautious)
     Room 3  Racing          Q-Learning            (off-policy, greedy)
     Room 4  Football        DQN                   (continuous state)
-    Room 5  Obstacles       DQN + sensors         (dynamic obstacles)
+    Room 5  Cross the Road  DQN + sensors         (moving traffic)
 
 Each room module exposes a ``render()`` function.  Rooms are imported lazily so
 a problem in one room never prevents the others from loading.
@@ -32,9 +32,9 @@ ROOMS = {
     "🏠 Overview": None,
     "🟡 Room 1 — Pacman · Dynamic Programming": "ui.room1_pacman",
     "💎 Room 2 — Museum Heist · SARSA": "ui.room2_museum",
-    "🏎️ Room 3 — Racing · Q-Learning": "ui.room3_racing",
+    "🏎️ Room 3 — Street Race · Q-Learning": "ui.room3_racing",
     "⚽ Room 4 — Football · DQN": "ui.room4_football",
-    "🚧 Room 5 — Obstacles · DQN + sensors": "ui.room5_obstacles",
+    "🐔 Room 5 — Cross the Road · DQN + sensors": "ui.room5_obstacles",
 }
 
 SHARED_MODULES = [
@@ -97,8 +97,8 @@ _ROOM_CARDS = [
      "Race to the finish: gamble on the risky oil short-cut or play the long safe line."),
     ("⚽", "Room 4 · Football", "DQN", "#2e7d32",
      "Continuous control: dribble past defenders, time the shot, curve the ball past the keeper."),
-    ("🚧", "Room 5 · Obstacles", "DQN + sensors", "#455a64",
-     "Navigate dynamic obstacles with look-ahead sensors, then test on a brand-new random room."),
+    ("🐔", "Room 5 · Cross the Road", "DQN + sensors", "#455a64",
+     "Guide a chicken through moving traffic with look-ahead sensors, then test on brand-new lanes."),
 ]
 
 

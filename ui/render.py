@@ -2,8 +2,8 @@
 
 * :func:`render_grid`   -- draws one frame of a 10x10 grid room (Rooms 1-3).
 * :func:`field_axes`    -- sets up a metres-based pitch for the continuous
-                           rooms (Rooms 4-5); the rooms draw players/obstacles
-                           on top.
+                           rooms (Rooms 4-5); each room draws its entities on
+                           top.
 * :func:`metrics_frame` -- turns a :class:`~rl.utils.TrainResult` into a tidy
                            ``pandas.DataFrame`` for the learning-curve charts.
 """

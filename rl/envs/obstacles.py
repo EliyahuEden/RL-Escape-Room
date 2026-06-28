@@ -1,29 +1,26 @@
-"""Room 5 (optional) — Dynamic Obstacles (DQN + look-ahead sensors).
+"""Room 5 — Chicken road crossing (DQN + look-ahead sensors).
 
-A continuous 10x10 m room.  The player must cross from the left to the **exit**
-on the right while avoiding circular **obstacles** of width 0.5 m (radius 0.25).
-The number and positions of the obstacles are **dynamic**: a fresh random layout
-is generated every episode, so the agent cannot memorise a map — it must learn a
-reactive avoidance policy from its **sensors**.
+A continuous 10x10 m road.  The chicken starts on the left sidewalk and must
+reach the right edge while traffic moves vertically through the box.  Cars are
+spawned in lanes with alternating up/down directions and wrap from just outside
+one edge back to the other, so the policy has to learn when to move, dodge, or
+wait instead of memorising a static layout.
 
 Observation (the controllable part)
 -----------------------------------
-The agent always sees its own dynamics ``(x, y, vx, vy)`` and the direction to
-the exit.  On top of that it senses the nearest obstacles whose **centre** lies
-within ``sensor_range`` metres of its own centre (the "see X metres ahead"
-control).  Each sensor slot reports the obstacle's relative position and how
-close it is; empty slots read as "clear".  Lowering ``sensor_range`` makes the
-agent short-sighted and the task much harder.
-
-Because the policy is purely sensor-based it generalises, so after training you
-can drop it into a brand-new random room and watch it cope.
+The chicken sees its own dynamics ``(x, y, vx, vy)`` and the direction to the
+far sidewalk.  It also senses the nearest cars inside ``sensor_range``.  Each
+sensor slot reports the car's relative centre, vertical velocity, and closeness.
+Empty slots read as "clear".  The policy is therefore reactive and can be tested
+on fresh traffic patterns after training.
 """
 
 from __future__ import annotations
 
 import math
 import random
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Optional
 
 import numpy as np
 
@@ -31,37 +28,62 @@ UP, DOWN, LEFT, RIGHT, STAY = range(5)
 _VEL = {UP: (0, 1), DOWN: (0, -1), LEFT: (-1, 0), RIGHT: (1, 0), STAY: (0, 0)}
 
 
+@dataclass
+class Car:
+    x: float
+    y: float
+    direction: float
+    speed: float
+    width: float
+    height: float
+    color: str
+
+    def copy(self) -> "Car":
+        return Car(self.x, self.y, self.direction, self.speed, self.width, self.height, self.color)
+
+
 class ObstacleEnv:
     def __init__(
         self,
-        n_obstacles: int = 6,
-        obstacle_radius: float = 0.25,
+        n_cars: Optional[int] = None,
+        *,
+        n_obstacles: Optional[int] = None,
+        car_width: float = 0.55,
+        car_height: float = 1.05,
         player_radius: float = 0.2,
-        sensor_range: float = 3.0,
-        max_sensed: int = 4,
+        sensor_range: float = 3.5,
+        max_sensed: int = 6,
         randomize: bool = True,
         dt: float = 0.02,
         action_repeat: int = 10,
-        player_speed: float = 1.0,
+        player_speed: float = 1.6,
+        car_speed: float = 1.35,
         # rewards
-        r_goal: float = 200.0,
-        r_collision: float = -100.0,
-        r_oob: float = -30.0,
-        r_near: float = -0.5,
-        r_step: float = -0.1,
-        k_progress: float = 3.0,
-        near_radius: float = 0.6,
+        r_goal: float = 250.0,
+        r_collision: float = -140.0,
+        r_oob: float = -40.0,
+        r_near: float = -0.6,
+        r_step: float = -0.08,
+        k_progress: float = 4.0,
+        near_radius: float = 0.55,
         seed: Optional[int] = None,
     ) -> None:
         self.W = self.H = 10.0
-        self.n_obstacles = int(n_obstacles)
-        self.obstacle_radius = obstacle_radius
+        # Backwards-compatible alias for old UI/session configs.
+        if n_cars is None:
+            n_cars = n_obstacles if n_obstacles is not None else 14
+        self.n_cars = int(n_cars)
+        self.car_width = float(car_width)
+        self.car_height = float(car_height)
         self.player_radius = player_radius
         self.sensor_range = sensor_range
         self.max_sensed = int(max_sensed)
         self.randomize = randomize
-        self.dt_eff = dt * action_repeat
+        self.dt = dt
+        self.action_repeat = int(action_repeat)
         self.player_speed = player_speed
+        self.car_speed = car_speed
+        self.max_car_speed = max(0.1, car_speed * 1.5)
         self.r_goal, self.r_collision, self.r_oob = r_goal, r_collision, r_oob
         self.r_near, self.r_step, self.k_progress = r_near, r_step, k_progress
         self.near_radius = near_radius
@@ -69,34 +91,61 @@ class ObstacleEnv:
 
         self.goal_x = self.W - 0.25
         self.goal_cy = self.H / 2.0
-        self.start = (0.5, self.H / 2.0)
+        self.start = (0.45, self.H / 2.0)
+        self.road_x_min = 1.25
+        self.road_x_max = self.goal_x - 0.65
+        self.wrap_margin = max(1.0, self.car_height)
+        self.lane_xs: List[float] = []
 
         self.n_actions = 5
-        self.obs_dim = 6 + 3 * self.max_sensed
+        self.obs_dim = 6 + 4 * self.max_sensed
         self._diag = math.hypot(self.W, self.H)
-        self.obstacles: List[Tuple[float, float]] = []
-        self._fixed = None
+        self.cars: List[Car] = []
+        self._fixed: Optional[List[Car]] = None
         self.reset()
 
     # -- layout -------------------------------------------------------------
-    def _generate_obstacles(self) -> List[Tuple[float, float]]:
-        obs: List[Tuple[float, float]] = []
-        tries = 0
-        while len(obs) < self.n_obstacles and tries < 500:
-            tries += 1
-            x = self.rng.uniform(2.0, self.W - 1.5)
-            y = self.rng.uniform(0.6, self.H - 0.6)
-            if all(math.hypot(x - ox, y - oy) > 1.0 for ox, oy in obs):
-                obs.append((x, y))
-        return obs
+    def _generate_cars(self) -> List[Car]:
+        cars: List[Car] = []
+        lane_count = min(8, max(4, math.ceil(self.n_cars / 2)))
+        lane_min = self.road_x_min + self.car_width * 0.9
+        lane_max = self.road_x_max - self.car_width * 0.6
+        self.lane_xs = np.linspace(lane_min, lane_max, lane_count).tolist()
+        per_lane = [self.n_cars // lane_count] * lane_count
+        for lane_idx in range(self.n_cars % lane_count):
+            per_lane[lane_idx] += 1
+
+        colors = ["#ef4444", "#f97316", "#8b5cf6", "#06b6d4", "#22c55e", "#facc15"]
+        span = self.H + 2 * self.wrap_margin
+        for lane_idx, count in enumerate(per_lane):
+            if count <= 0:
+                continue
+            direction = 1.0 if lane_idx % 2 == 0 else -1.0
+            lane_speed = self.car_speed * self.rng.uniform(0.78, 1.28)
+            spacing = span / count
+            phase = self.rng.uniform(0.0, spacing)
+            for car_idx in range(count):
+                y = -self.wrap_margin + ((phase + car_idx * spacing) % span)
+                cars.append(
+                    Car(
+                        x=self.lane_xs[lane_idx] + self.rng.uniform(-0.08, 0.08),
+                        y=y,
+                        direction=direction,
+                        speed=lane_speed,
+                        width=self.car_width,
+                        height=self.car_height,
+                        color=colors[(lane_idx + car_idx) % len(colors)],
+                    )
+                )
+        return cars
 
     def reset(self):
         if self.randomize or self._fixed is None:
-            self.obstacles = self._generate_obstacles()
+            self.cars = self._generate_cars()
             if not self.randomize:
-                self._fixed = self.obstacles
+                self._fixed = [car.copy() for car in self.cars]
         else:
-            self.obstacles = self._fixed
+            self.cars = [car.copy() for car in self._fixed]
         self.x, self.y = self.start
         self.vx = self.vy = 0.0
         self.steps = 0
@@ -104,32 +153,60 @@ class ObstacleEnv:
         return self._obs()
 
     # -- helpers ------------------------------------------------------------
-    def _min_obstacle_dist(self) -> float:
-        if not self.obstacles:
+    def _wrap_car(self, car: Car) -> None:
+        span = self.H + 2 * self.wrap_margin
+        if car.direction > 0 and car.y - car.height / 2 > self.H + self.wrap_margin:
+            car.y -= span
+        elif car.direction < 0 and car.y + car.height / 2 < -self.wrap_margin:
+            car.y += span
+
+    def _advance_cars(self, dt: float) -> None:
+        for car in self.cars:
+            car.y += car.direction * car.speed * dt
+            self._wrap_car(car)
+
+    def _distance_to_car(self, car: Car) -> float:
+        left = car.x - car.width / 2
+        right = car.x + car.width / 2
+        bottom = car.y - car.height / 2
+        top = car.y + car.height / 2
+        closest_x = min(max(self.x, left), right)
+        closest_y = min(max(self.y, bottom), top)
+        return math.hypot(self.x - closest_x, self.y - closest_y)
+
+    def _min_car_dist(self) -> float:
+        if not self.cars:
             return self._diag
-        return min(math.hypot(self.x - ox, self.y - oy) for ox, oy in self.obstacles)
+        return min(self._distance_to_car(car) for car in self.cars)
 
     def _collision(self) -> bool:
-        thresh = self.player_radius + self.obstacle_radius
-        return any(math.hypot(self.x - ox, self.y - oy) <= thresh
-                   for ox, oy in self.obstacles)
+        return any(self._distance_to_car(car) <= self.player_radius for car in self.cars)
 
     def _obs(self) -> np.ndarray:
-        feats = [self.x / self.W, self.y / self.H, self.vx, self.vy,
-                 (self.goal_x - self.x) / self.W, (self.goal_cy - self.y) / self.H]
+        feats = [
+            self.x / self.W,
+            self.y / self.H,
+            self.vx,
+            self.vy,
+            (self.goal_x - self.x) / self.W,
+            (self.goal_cy - self.y) / self.H,
+        ]
         sensed = sorted(
-            ((math.hypot(self.x - ox, self.y - oy), ox, oy) for ox, oy in self.obstacles),
+            ((self._distance_to_car(car), car) for car in self.cars),
             key=lambda t: t[0],
         )
         slots = 0
-        for dist, ox, oy in sensed:
+        for dist, car in sensed:
             if dist > self.sensor_range or slots >= self.max_sensed:
                 break
-            feats += [(ox - self.x) / self.sensor_range,
-                      (oy - self.y) / self.sensor_range,
-                      1.0 - dist / self.sensor_range]
+            feats += [
+                (car.x - self.x) / self.sensor_range,
+                (car.y - self.y) / self.sensor_range,
+                (car.direction * car.speed) / self.max_car_speed,
+                1.0 - dist / self.sensor_range,
+            ]
             slots += 1
-        feats += [0.0, 0.0, 0.0] * (self.max_sensed - slots)  # empty = "clear"
+        feats += [0.0, 0.0, 0.0, 0.0] * (self.max_sensed - slots)  # empty = "clear"
         return np.asarray(feats, dtype=np.float32)
 
     # -- step ---------------------------------------------------------------
@@ -138,43 +215,64 @@ class ObstacleEnv:
         reward = self.r_step
         info = {"success": False}
 
-        vx, vy = _VEL[action]
+        vx, vy = _VEL[int(action)]
         self.vx, self.vy = float(vx), float(vy)
-        self.x += vx * self.player_speed * self.dt_eff
-        self.y += vy * self.player_speed * self.dt_eff
 
-        if self.x < 0 or self.y < 0 or self.y > self.H:
-            self.x = min(max(self.x, 0.0), self.W)
-            self.y = min(max(self.y, 0.0), self.H)
-            reward += self.r_oob
-            info["event"] = "out of bounds"
-            return self._obs(), reward, True, info
+        for _ in range(self.action_repeat):
+            self.x += vx * self.player_speed * self.dt
+            self.y += vy * self.player_speed * self.dt
+            self._advance_cars(self.dt)
 
-        if self._collision():
-            reward += self.r_collision
-            info["event"] = "hit an obstacle"
-            return self._obs(), reward, True, info
+            if self.x < 0 or self.y < 0 or self.y > self.H:
+                self.x = min(max(self.x, 0.0), self.W)
+                self.y = min(max(self.y, 0.0), self.H)
+                reward += self.r_oob
+                info["event"] = "ran off the road"
+                return self._obs(), reward, True, info
 
-        if self.x >= self.goal_x:
-            reward += self.r_goal
-            info["event"] = "reached the exit"
-            info["success"] = True
-            return self._obs(), reward, True, info
+            if self._collision():
+                reward += self.r_collision
+                info["event"] = "hit by traffic"
+                return self._obs(), reward, True, info
+
+            if self.x >= self.goal_x:
+                reward += self.r_goal
+                info["event"] = "crossed the road"
+                info["success"] = True
+                return self._obs(), reward, True, info
 
         dx = self.goal_x - self.x
         reward += self.k_progress * (self._prev_dx - dx)
         self._prev_dx = dx
-        if self._min_obstacle_dist() < self.near_radius:
-            reward += self.r_near  # discourage grazing obstacles
+
+        nearest = self._min_car_dist()
+        if nearest < self.near_radius:
+            reward += self.r_near * (1.0 - nearest / self.near_radius)
 
         return self._obs(), reward, False, info
 
     # -- rendering ----------------------------------------------------------
     def render_state(self) -> dict:
         return {
-            "x": self.x, "y": self.y, "vx": self.vx, "vy": self.vy,
-            "obstacles": list(self.obstacles),
-            "obstacle_radius": self.obstacle_radius,
+            "x": self.x,
+            "y": self.y,
+            "vx": self.vx,
+            "vy": self.vy,
+            "cars": [
+                {
+                    "x": car.x,
+                    "y": car.y,
+                    "direction": car.direction,
+                    "speed": car.speed,
+                    "width": car.width,
+                    "height": car.height,
+                    "color": car.color,
+                }
+                for car in self.cars
+            ],
             "sensor_range": self.sensor_range,
             "goal_x": self.goal_x,
+            "road_x_min": self.road_x_min,
+            "road_x_max": self.road_x_max,
+            "lane_xs": list(self.lane_xs),
         }

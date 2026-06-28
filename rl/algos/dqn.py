@@ -1,6 +1,6 @@
 """Deep Q-Network (DQN) with experience replay and a target network.
 
-Used for the two continuous rooms (Room 4 Football, Room 5 Obstacles), where the
+Used for the two continuous rooms (Room 4 Football, Room 5 Cross the Road), where the
 state is real-valued and a Q-table is impractical — so a small MLP approximates
 the action-value function Q(s, a).
 

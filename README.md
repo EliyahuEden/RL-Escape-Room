@@ -10,9 +10,9 @@ different stages of training to see what the policy learned.
 |------|-------|-----------|-------|-----------|
 | 1 | 🟡 Pacman | **Dynamic Programming** | Known | Collect every coin, then exit |
 | 2 | 💎 Museum Heist | **SARSA** (on-policy) | Unknown | Steal the diamond, dodge cameras/traps, escape |
-| 3 | 🏎️ Racing | **Q-Learning** (off-policy) | Unknown | Reach the finish fast (boosters, oil, mud, short-cut) |
+| 3 | 🏎️ Street Race | **Q-Learning** (off-policy) | Unknown | Race through oil, mud, boosters & crash barriers |
 | 4 | ⚽ Football | **DQN** (function approx.) | Unknown, continuous | Beat defenders + keeper and score |
-| 5 | 🚧 Obstacles *(optional)* | **DQN + sensors** | Unknown, continuous | Cross a *random* room avoiding obstacles |
+| 5 | 🐔 Cross the Road *(optional)* | **DQN + sensors** | Unknown, continuous | Cross moving traffic as a chicken |
 
 Difficulty increases across the rooms: a known-model planning problem → cautious
 on-policy control → aggressive off-policy control → continuous control with a
@@ -43,10 +43,10 @@ rl/
   envs/
     grid_base.py        Shared 10x10 geometry + slippery-cell transition model
     pacman.py           Room 1 environment (+ explicit MDP for DP)
-    museum.py           Room 2 environment
-    racing.py           Room 3 environment
+    museum.py           Room 2 environment (museum heist)
+    racing.py           Room 3 environment (dungeon escape)
     football.py         Room 4 continuous environment
-    obstacles.py        Room 5 continuous environment (dynamic layouts + sensors)
+    obstacles.py        Room 5 continuous environment (moving traffic + sensors)
   algos/
     dp.py               Value iteration & policy iteration
     td_core.py          Shared tabular TD control
@@ -102,72 +102,55 @@ policy-changes per sweep, a **final value heatmap + greedy-policy arrows**, and 
 
 ## Room 2 — Museum Heist · SARSA
 
-**Idea.** A thief must steal the **diamond** and reach the **exit**, choosing
-between a **short dangerous route** (past cameras and patrol guards) and a
-**longer safe one**. The model is **unknown** — SARSA learns purely from
-experience. A sidebar lets you use a **randomly generated** museum (cameras,
-traps, icy tiles, patrol guards) or a fixed layout. Every generated map is
-**BFS-verified** before use: it always has a valid Start→Diamond→Exit path, the
-**short route passes through the danger** (a wall of cameras + a trap, guards
-nearby), and a **danger-free safe route exists and is meaningfully longer** —
-guaranteeing the cautious-vs-greedy trade-off SARSA is meant to expose.
+**Idea.** A robber breaks into a museum to steal the **diamond** from the vault
+and escape. The museum has gallery rooms connected by corridors, security
+**cameras**, **laser traps**, **patrol guards**, and **slippery marble floors**.
+The model is **unknown** — SARSA learns from experience.
 
-* **State:** `(cell, has_diamond)`, plus `guard_t` (the guards' shared patrol
-  step) when guards are present, so the agent can learn their timing.
-  **Final state:** reaching the exit *with* the diamond.
+The default layout is a museum floor plan with a vault at the top, exhibition
+galleries in the middle, and a heavy camera surveillance zone near the exit.
+Different generated museums create different heist challenges.
+
+* **State:** `(cell, has_diamond)`, plus `guard_phase` when patrol guards are
+  enabled. **Final state:** reaching the exit *with* the diamond.
 * **Actions:** Up / Down / Left / Right.
-* **Cameras** are **vision zones**: entering one costs a penalty but does **not**
-  end the episode (you keep moving). **Patrol guards** walk fixed routes — being
-  **caught ends the heist** with a big penalty. The exit is locked without the loot.
-* **Rewards:** `+30` diamond · `+120` escape with the diamond · `−1` step ·
-  `−25` per step inside a camera zone · `−50` caught by a guard (terminal) ·
-  `−20` trap · `−10` trying to exit without the diamond · `−5` slip · `−5` wall.
+* **Dynamics:** cameras cost a heavy penalty per step in their zone, traps hurt,
+  guards end the heist if they catch you, marble floors deflect movement.
+* **Rewards:** `+30` diamond · `+100` escape · `−1` step · `−50` camera zone ·
+  `−15` trap · `−50` caught by guard (terminal) · `−5` slip · `−2` wall.
 
 **Best parameters.** `episodes = 1500`, `α = 0.2`, `γ = 0.97`, `ε: 1.0 → 0.02`
-(decay 0.997 / episode), `slip = 0.05` → **100 % success**; the greedy policy
-steals the diamond and escapes (~14 steps) while keeping camera exposure and guard
-risk to a minimum.
-
-**Graphs.** Reward + moving-average, steps, rolling success rate, ε-decay, **camera
-detections per episode**, **times caught by guards**, and trap hits — plus a replay
-of **any** training episode (including exploratory failures).
-
-**What it tests.** Learning a *safe* path, not just the shortest one — SARSA
-evaluates the ε-greedy policy it actually follows and therefore avoids routes where
-its own exploration could walk it into a guard. The natural contrast with Room 3's
-Q-Learning, which hugs the short, risky line.
+(decay 0.997 / episode), `slip = 0.1` → **100 % success**. The greedy policy
+finds a clean path through the museum, avoids cameras, and escapes with the
+diamond.
 
 ---
 
-## Room 3 — Racing · Q-Learning
+## Room 3 — Street Race · Q-Learning
 
-**Idea.** A **randomly generated track** (or a fixed one). Every generated map is
-**BFS-verified** to provide a longer **safe route** *and* a shorter **oily
-short-cut**: the short-cut's oil cells are guaranteed crash-risky (flanked by
-walls or crash zones ✕), a **boost** sits just past it, and **mud** slows the safe
-route — so the shortcut is meaningfully shorter but a slip there can fling the car
-into a wall/crash zone and **end the run**. Off-policy Q-Learning chases the
-highest-value line, so it's the algorithm that decides whether the gamble pays off.
+**Idea.** A car races through a **street circuit** from start to finish,
+navigating oil spills, mud patches, crash barriers, and collecting boosters.
+The winding streets create multiple routes with different risk/reward tradeoffs.
 
-* **State:** `(cell, booster_mask)` — position plus which one-off **boosters** have
-  been taken (so a booster can't be farmed). **Final state:** crossing the finish.
+This is harder than Room 2: the track has more hazards, boosters add bitmask
+states (increasing the state space), and oil dynamics create stochastic risk
+(slipping into a crash barrier ends the race).
+
+* **State:** `(cell, booster_mask)` — position plus a bitmask of boosters
+  already collected. **Final state:** crossing the finish line.
 * **Actions:** Up / Down / Left / Right.
-* **Crash rule:** a slip (oil, 70/15/15) that throws the car into a wall/edge — or
-  driving into a crash zone — **ends the episode**. A normal blocked move just bumps
-  (wall) or nudges the edge (leave-track), staying on the track.
-* **Rewards:** `+150` finish · `+20` booster (once) · `−1` step · `−5` mud ·
-  `−100` crash (terminal) · `−30` leaving the track edge · `−5` hitting a wall.
+* **Dynamics:** oil spills deflect movement sideways (slip), mud costs penalty,
+  crash barriers are terminal, boosters are one-time pickups.
+* **Rewards:** `+200` finish · `+15` booster (once) · `−1` step · `−5` mud ·
+  `−200` crash (terminal) · `−30` off-track · `−5` wall hit.
 
 **Best parameters.** `episodes = 2000`, `α = 0.2`, `γ = 0.97`, `ε: 1.0 → 0.05`
-(decay 0.997), `oil slip = 0.3` → ~**87 % success** with a **~13 % crash rate**:
-Q-Learning takes the short-cut and crashes sometimes. **Lower the slip** to make the
-short-cut safer (more shortcut use), **raise it** and the agent learns to play safe
-on the long serpentine.
+(decay 0.997), `oil slip = 0.2` → Q-Learning aggressively learns the fastest
+racing line, collecting boosters on the way.
 
-**Graphs.** Reward + moving-average, steps-to-finish, rolling success rate, ε-decay,
-**crashes per episode (crash rate)**, **short-cut tiles used per episode**, plus a
-replay of any training episode. Tick *"Also train SARSA for comparison"* for overlaid
-curves and a **🏁 race** of both greedy policies on the same track.
+**Bonus — SARSA comparison.** Tick *"Also train SARSA"* to see the on-policy
+contrast. Overlaid reward/steps curves and a **🏁 race** of both greedy
+policies on the same track.
 
 ---
 
@@ -220,30 +203,32 @@ finish (sometimes bending the ball with curve).
 
 ---
 
-## Room 5 *(optional)* — Dynamic Obstacles · DQN + sensors
+## Room 5 *(optional)* — Cross the Road · DQN + sensors
 
-**Idea.** Cross to the exit while avoiding circular **obstacles** (width 0.5 m). A
-**new random layout every episode** means the agent can't memorise a map — it must
-learn a **reactive** policy from local **sensors**, which is exactly what lets the
-trained policy be dropped into a **brand-new random room** at the end.
+**Idea.** A chicken starts on the left sidewalk and must reach the far edge of a
+10×10 m road. Cars stream vertically through alternating lanes, wrap in from
+off-map, and keep moving while the chicken chooses up / down / left / right /
+wait. A **new traffic pattern every episode** means the agent cannot memorise one
+layout — it must learn a **reactive** crossing policy from local **sensors**.
 
-* **State:** `(x, y, vₓ, v_y)` (continuous, same physics as Room 4, 5 move actions).
-* **Observation:** own dynamics + direction to exit + the nearest obstacles whose
-  **centre** is within **`sensor_range` metres** (the "see X metres ahead" control),
-  each as a relative position + closeness. Empty slots read as "clear".
-  `obs_dim = 6 + 3 × (obstacles sensed)`.
-* **Rewards:** `+200` reaching the exit · `−100` hitting an obstacle · `−30` out of
-  bounds · `−0.5` grazing (within 0.6 m of an obstacle) · `−0.1` step, plus
-  rightward progress shaping. **Final state:** crossing the exit line.
+* **State:** `(x, y, vₓ, v_y)` (continuous, same physics style as Room 4, 5 move
+  actions).
+* **Observation:** own dynamics + direction to the far sidewalk + the nearest cars
+  inside **`sensor_range` metres**, each as relative position, vertical velocity,
+  and closeness. Empty slots read as "clear".
+  `obs_dim = 6 + 4 × (cars sensed)`.
+* **Rewards:** `+250` crossing the road · `−140` being hit by traffic · `−40` out
+  of bounds · a small near-traffic penalty · `−0.08` per step, plus rightward
+  progress shaping. **Final state:** reaching the right edge.
 
-**Best parameters.** `episodes ≈ 600`, hidden `(128, 128)`, `lr = 1e-3`, `γ = 0.99`,
-`sensor_range = 3.0 m`, `6 obstacles`, frame-skip 10. **Shrink the sensor range**
-to make the agent short-sighted (much harder); **add obstacles** to crowd the room.
-After training, hit **"Generate & test"** to spawn an unseen room and replay the
-learned policy in it.
+**Best parameters.** `episodes ≈ 800`, hidden `(128, 128)`, `lr = 1e-3`, `γ = 0.99`,
+`sensor_range = 3.5 m`, `14 cars`, frame-skip 10. **Shrink the sensor range** to
+make the chicken short-sighted; **add cars** or increase traffic speed to make the
+road more crowded. After training, hit **"Generate & test"** to spawn unseen
+traffic and replay the learned policy in it.
 
 **What it tests.** Generalisation via local observation + function approximation —
-the agent solves rooms it has never seen.
+the agent solves traffic patterns it has never seen.
 
 ---
 
