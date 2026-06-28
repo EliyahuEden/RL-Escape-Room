@@ -23,8 +23,6 @@ neural network → a generalising, sensor-based policy tested on unseen rooms.
 ## Running it
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate            # Windows  (use: source .venv/bin/activate on macOS/Linux)
 pip install -r requirements.txt
 streamlit run app.py
 ```
