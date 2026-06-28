@@ -32,12 +32,17 @@ from typing import List, Optional
 
 import numpy as np
 
-UP, DOWN, LEFT, RIGHT, STAY = range(5)
-_VEL = {UP: (0, 1), DOWN: (0, -1), LEFT: (-1, 0), RIGHT: (1, 0), STAY: (0, 0)}
-# kick action -> (power_key, curve_sign)
+UP, DOWN, LEFT, RIGHT, STAY, UP_LEFT, UP_RIGHT, DOWN_LEFT, DOWN_RIGHT = range(9)
+_D = 1.0 / math.sqrt(2.0)  # diagonals are unit-normalised so they aren't faster
+_VEL = {
+    UP: (0.0, 1.0), DOWN: (0.0, -1.0), LEFT: (-1.0, 0.0), RIGHT: (1.0, 0.0),
+    STAY: (0.0, 0.0),
+    UP_LEFT: (-_D, _D), UP_RIGHT: (_D, _D), DOWN_LEFT: (-_D, -_D), DOWN_RIGHT: (_D, -_D),
+}
+# kick action -> (power_key, curve_sign)  (actions 9..14, after the 9 move actions)
 _KICKS = {
-    5: ("soft", 0.0), 6: ("soft", -1.0), 7: ("soft", 1.0),
-    8: ("hard", 0.0), 9: ("hard", -1.0), 10: ("hard", 1.0),
+    9: ("soft", 0.0), 10: ("soft", -1.0), 11: ("soft", 1.0),
+    12: ("hard", 0.0), 13: ("hard", -1.0), 14: ("hard", 1.0),
 }
 
 
@@ -103,7 +108,7 @@ class FootballEnv:
         self.max_steps = int(max_steps)
         self.rng = random.Random(seed)
 
-        self.n_actions = 11
+        self.n_actions = 15  # 9 moves (incl. diagonals) + 6 kicks
         self.obs_dim = 10 + 3 * self.n_defenders
         self._diag = math.hypot(self.W, self.H)
         self.reset()
@@ -223,7 +228,7 @@ class FootballEnv:
         info = {"success": False}
         self._flight = None
 
-        if action >= 5:  # a kick
+        if action in _KICKS:  # a kick
             if self.x < self.shoot_x:
                 reward += self.r_wasted
                 info["event"] = "shot from too far — wasted"

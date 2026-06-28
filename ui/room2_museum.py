@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from typing import Dict
 
 import streamlit as st
@@ -35,8 +36,8 @@ def _draw(env: MuseumEnv, frame: dict):
     title = "Diamond: ✓ — escaping" if has_d else "Diamond: ✗ — go steal it"
     if frame.get("success"):
         title = "Clean getaway!"
-    if frame.get("guard_hit"):
-        title = "Caught by a guard"
+    if frame.get("caught"):
+        title = "Caught by a guard!"
     return render_grid(env.rows, env.cols, walls=env.walls, cell_styles=styles,
                        agent=frame["pos"], agent_color="#2b2b2b",
                        agent_symbol="robber", agent_symbol_color="#f5f5f5",
@@ -47,10 +48,12 @@ def _draw(env: MuseumEnv, frame: dict):
 def render() -> None:
     st.title("💎 Room 2 — Museum Heist · SARSA")
     st.markdown(
-        "Steal the 💎, dodge the cameras 📷 and traps ⚠, then escape. The bottom "
-        "row of cameras is a **cliff**: step in and the alarm drags you back to "
-        "start. SARSA is **on-policy**, so it accounts for its own ε-greedy "
-        "exploration and learns a path with a safety margin from the cliff."
+        "Steal the 💎, then escape through the exit. **Camera vision zones** cost a "
+        "penalty each step you're seen (you keep moving), **traps** hurt, and a "
+        "**patrol guard** that catches you **ends the heist** (big penalty). There's "
+        "a short dangerous route past the cameras/guards and a longer safe one — "
+        "SARSA is **on-policy**, so it accounts for its own ε-greedy exploration and "
+        "learns the cautious path."
     )
 
     with st.sidebar:
@@ -68,20 +71,27 @@ def render() -> None:
         slip_prob = st.slider("Slip probability", 0.0, 0.4, 0.05, 0.05)
         max_steps = st.slider("Max steps / episode", 50, 500, 200, 50)
         seed = st.number_input("Random seed", value=1, step=1)
-        st.header("Map difficulty")
-        map_seed = st.number_input("Map seed", value=21, step=1, key="room2_map_seed")
+        st.header("Map (random each time)")
+        if "room2_map_seed" not in st.session_state:
+            st.session_state["room2_map_seed"] = random.randint(0, 99999)
+        if st.button("🎲 New random layout", key="room2_newmap",
+                     use_container_width=True, disabled=map_mode != "Generated"):
+            st.session_state["room2_map_seed"] = random.randint(0, 99999)
+        map_seed = st.number_input("Map seed", step=1, key="room2_map_seed")
         n_cameras = st.slider("Camera cells", 0, 18, 10, disabled=map_mode != "Generated")
         n_traps = st.slider("Traps", 0, 8, 3, disabled=map_mode != "Generated")
         n_slippery = st.slider("Slippery tiles", 0, 18, 7, disabled=map_mode != "Generated")
         n_guards = st.slider("Patrol guards", 0, 5, 2, disabled=map_mode != "Generated")
         with st.expander("Reward shaping"):
             r_diamond = st.number_input("Diamond", value=30.0, step=5.0)
-            r_exit = st.number_input("Exit", value=100.0, step=10.0)
-            r_camera = st.number_input("Camera (alarm)", value=-25.0, step=5.0)
+            r_exit = st.number_input("Escape with diamond", value=120.0, step=10.0)
+            r_camera = st.number_input("Camera vision zone", value=-25.0, step=5.0)
             r_trap = st.number_input("Trap", value=-20.0, step=5.0)
-            r_guard = st.number_input("Guard catch", value=-35.0, step=5.0)
+            r_guard = st.number_input("Caught by guard (ends run)", value=-50.0, step=5.0)
+            r_exit_early = st.number_input("Exit without diamond", value=-10.0, step=1.0)
             r_step = st.number_input("Step cost", value=-1.0, step=1.0)
             r_slip = st.number_input("Slip", value=-5.0, step=1.0)
+            r_wall = st.number_input("Wall hit", value=-5.0, step=1.0)
         train = st.button("🎓 Train SARSA", type="primary", use_container_width=True)
 
     layout = (
@@ -92,7 +102,8 @@ def render() -> None:
     env_config = dict(layout=layout, slip_prob=slip_prob, max_steps=max_steps,
                       r_step=r_step, r_diamond=r_diamond, r_exit=r_exit,
                       r_camera=r_camera, r_trap=r_trap, r_guard=r_guard,
-                      r_slip=r_slip, seed=int(seed))
+                      r_slip=r_slip, r_wall=r_wall, r_exit_early=r_exit_early,
+                      seed=int(seed))
 
     def make_env() -> MuseumEnv:
         return MuseumEnv(**env_config)
@@ -103,7 +114,8 @@ def render() -> None:
     with left:
         st.subheader("Museum")
         st.pyplot(_draw(env, env.render_state()), clear_figure=True)
-        st.caption(f"{len(env.cameras)} camera cells · {len(env.traps)} trap(s) · "
+        st.caption("Every map has a short route through the danger + a longer safe one · "
+                   f"{len(env.cameras)} camera cells · {len(env.traps)} trap(s) · "
                    f"{len(env.slippery)} icy cells · {len(env.guard_starts)} patrol guard(s)")
 
     if train:

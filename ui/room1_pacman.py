@@ -5,13 +5,58 @@ from __future__ import annotations
 import random
 from typing import Dict, List
 
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from rl.algos.dp import policy_iteration, value_iteration
+from rl.envs.grid_base import DOWN, LEFT, RIGHT, UP
 from rl.envs.pacman import DEFAULT_LAYOUT, PacmanEnv, generate_pacman_layout
 from ui.common import sequence_replay_player
 from ui.render import render_grid
+
+_ARROW = {UP: (0.0, -0.3), DOWN: (0.0, 0.3), LEFT: (-0.3, 0.0), RIGHT: (0.3, 0.0)}
+
+
+def _slice_state(env: PacmanEnv, cell):
+    """The DP state for ``cell`` in the start configuration (no coins taken,
+    guard at its starting position/phase) — the slice we visualise."""
+    if not env.guard_enabled:
+        return (cell, env.full_mask)
+    guard_rep = env.guard_start if env.guard_mode == "chase" else 0
+    return (cell, env.full_mask, guard_rep)
+
+
+def _value_policy_fig(env: PacmanEnv, V: Dict, policy: Dict):
+    """Final value heatmap + greedy-policy arrows over the maze."""
+    grid = np.full((env.rows, env.cols), np.nan)
+    for r in range(env.rows):
+        for c in range(env.cols):
+            if (r, c) in env.walls:
+                continue
+            s = _slice_state(env, (r, c))
+            if s in V:
+                grid[r, c] = V[s]
+    fig, ax = plt.subplots(figsize=(4.8, 4.8))
+    im = ax.imshow(grid, cmap="viridis")
+    for r in range(env.rows):
+        for c in range(env.cols):
+            if (r, c) in env.walls or (r, c) == env.door:
+                continue
+            s = _slice_state(env, (r, c))
+            a = policy.get(s)
+            if a is None:
+                continue
+            dx, dy = _ARROW[a]
+            ax.arrow(c, r, dx, dy, head_width=0.16, head_length=0.14,
+                     fc="white", ec="#111", lw=0.5, length_includes_head=True, zorder=3)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Value heatmap + greedy policy (start config)", fontsize=10)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout(pad=0.3)
+    return fig
 
 SLIP_COLOR = "#bfe3ff"
 COIN_COLOR = "#f5b301"
@@ -27,7 +72,12 @@ def _estimate_state_count(env: PacmanEnv) -> int:
         if (r, c) not in env.walls
     )
     masks = 1 << len(env.coins)
-    guard_multiplier = free_cells if env.guard_enabled else 1
+    if not env.guard_enabled:
+        guard_multiplier = 1
+    elif env.guard_mode == "chase":
+        guard_multiplier = free_cells          # guard position carried in the state
+    else:
+        guard_multiplier = env.guard_period    # patrol phase carried in the state
     return free_cells * masks * guard_multiplier
 
 
@@ -108,21 +158,35 @@ def render() -> None:
         map_mode = st.selectbox("Map source", ["Generated", "Classic"], key="room1_map_mode")
         map_seed = st.number_input("Map seed", value=10, step=1, key="room1_map_seed")
         st.header("Guard")
-        guard_enabled = st.checkbox("Enable chasing guard", value=True)
-        guard_speed = st.slider("Guard speed (cells/turn)", 1, 2, 1)
-        coin_max = 4 if guard_enabled else 6
+        guard_enabled = st.checkbox("Enable guard", value=True)
+        guard_behavior = st.selectbox("Guard behaviour",
+                                      ["Chase (hunts you)", "Patrol (fixed loop)"],
+                                      disabled=not guard_enabled)
+        guard_mode = "chase" if guard_behavior.startswith("Chase") else "patrol"
+        guard_speed = st.slider("Guard speed (steps/turn)", 1, 2, 1)
+        patrol_len = st.slider("Patrol length", 2, 6, 5,
+                               disabled=guard_mode != "patrol")
+        # a chasing guard carries its position in the DP state (free_cells×),
+        # a patrol guard only its phase — so chase needs fewer coins to stay small
+        coin_max = (3 if guard_mode == "chase" else 5) if guard_enabled else 6
         if st.session_state.get("room1_coins", 3) > coin_max:
             st.session_state["room1_coins"] = coin_max
-        n_coins = st.slider("Coins", 2, coin_max, min(3, coin_max), key="room1_coins")
+        default_coins = 2 if guard_mode == "chase" else min(3, coin_max)
+        n_coins = st.slider("Coins", 2, coin_max, default_coins, key="room1_coins")
+        if guard_mode == "chase":
+            st.caption("🏃 The chase guard carries its **position** in the DP state, "
+                       "so it's heavier — fewer coins keep the solve fast. Pick "
+                       "**Patrol** for near-instant solves with more coins.")
         n_slippery = st.slider("Slippery tiles", 0, 18, 6)
-        slip_prob = st.slider("Slip probability", 0.0, 0.5, 0.15, 0.05)
+        slip_prob = st.slider("Slip probability (sideways)", 0.0, 0.5, 0.20, 0.05)
         with st.expander("Reward shaping"):
             r_coin = st.number_input("Coin reward", value=10.0, step=1.0)
             r_exit = st.number_input("Exit reward", value=100.0, step=10.0)
             r_step = st.number_input("Step cost", value=-1.0, step=1.0)
             r_door_early = st.number_input("Early-door penalty", value=-10.0, step=1.0)
             r_slip = st.number_input("Slip penalty", value=-5.0, step=1.0)
-            r_guard = st.number_input("Guard catch penalty", value=-75.0, step=5.0)
+            r_wall = st.number_input("Wall-hit penalty", value=-5.0, step=1.0)
+            r_guard = st.number_input("Guard catch penalty", value=-50.0, step=5.0)
         solve = st.button("🧠 Solve room (DP)", type="primary", use_container_width=True)
 
     layout = (
@@ -132,8 +196,9 @@ def render() -> None:
     )
     env_config = dict(layout=layout, slip_prob=slip_prob, r_step=r_step,
                       r_coin=r_coin, r_exit=r_exit, r_door_early=r_door_early,
-                      r_slip=r_slip, guard_enabled=guard_enabled,
-                      guard_speed=guard_speed, r_guard=r_guard)
+                      r_slip=r_slip, r_wall=r_wall, guard_enabled=guard_enabled,
+                      guard_speed=guard_speed, guard_mode=guard_mode,
+                      patrol_len=patrol_len, r_guard=r_guard)
 
     def make_env() -> PacmanEnv:
         return PacmanEnv(**env_config)
@@ -192,7 +257,7 @@ def render() -> None:
         st.session_state["room1"] = {
             "diag": diag, "start_value": V[mdp.start], "n_states": len(mdp.states),
             "snapshots": stages, "iteration_replays": iteration_replays,
-            "method": method, "env_config": env_config,
+            "method": method, "env_config": env_config, "V": V, "policy": policy,
         }
 
     data = st.session_state.get("room1")
@@ -228,6 +293,14 @@ def render() -> None:
             st.caption("Policy changes per sweep (→ 0 when the policy is stable)")
             st.line_chart(pd.DataFrame({"policy_changes": diag["policy_changes"]}),
                           height=200)
+
+        if data.get("V") is not None:
+            st.subheader("🗺️ Final value & policy")
+            st.pyplot(_value_policy_fig(trained_env, data["V"], data["policy"]),
+                      clear_figure=True)
+            st.caption("Colour = optimal value of each cell at the start (no coins "
+                       "collected, guard at patrol phase 0); arrows = the greedy "
+                       "Dynamic-Programming action.")
 
         if data.get("iteration_replays"):
             st.subheader("🎞️ Replay every DP iteration")

@@ -19,6 +19,9 @@ import streamlit as st
 from rl.utils import TrainResult, moving_average
 from ui.render import metrics_frame
 
+# replay animation speed → per-frame delay (seconds)
+_SPEEDS = {"0.5×": 0.16, "1×": 0.08, "2×": 0.04, "4×": 0.02}
+
 
 def train_with_live_progress(train_callable: Callable, update_every: int = 25) -> TrainResult:
     """Run ``train_callable(progress_cb)`` showing a live progress bar + curve."""
@@ -112,10 +115,14 @@ def replay_player(
             msg += f" • cumulative {frame['cum_reward']:+.1f}"
         info.write(msg)
 
-    if st.button("▶ Animate episode", key=f"{key}_play"):
+    c1, c2 = st.columns([1, 1])
+    play = c1.button("▶ Animate episode", key=f"{key}_play", use_container_width=True)
+    delay = _SPEEDS[c2.select_slider("Speed", options=list(_SPEEDS), value="1×",
+                                     key=f"{key}_speed", label_visibility="collapsed")]
+    if play:
         for i in range(len(traj)):
             show(i)
-            time.sleep(0.08)
+            time.sleep(delay)
     else:
         show(idx)
 
@@ -162,10 +169,15 @@ def sequence_replay_player(
             msg += f" · cumulative {frame['cum_reward']:+.1f}"
         info.write(msg)
 
-    if st.button(f"▶ Animate {item_label.lower()}", key=f"{key}_play"):
+    c1, c2 = st.columns([1, 1])
+    play = c1.button(f"▶ Animate {item_label.lower()}", key=f"{key}_play",
+                     use_container_width=True)
+    delay = _SPEEDS[c2.select_slider("Speed", options=list(_SPEEDS), value="1×",
+                                     key=f"{key}_speed", label_visibility="collapsed")]
+    if play:
         for i in range(len(traj)):
             show(i)
-            time.sleep(0.08)
+            time.sleep(delay)
     else:
         show(idx)
 

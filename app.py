@@ -43,36 +43,90 @@ SHARED_MODULES = [
 ]
 
 
+_CSS = """
+<style>
+.block-container { padding-top: 1.3rem; max-width: 1250px; }
+h1, h2, h3 { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+h2 { border-bottom: 2px solid #e6e6f2; padding-bottom: .25rem; }
+section[data-testid="stSidebar"] { background: linear-gradient(180deg,#f7f6ff,#eef0fb); }
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2 { font-size: 1.1rem; }
+.stButton > button {
+  border-radius: 10px; font-weight: 600; border: 1px solid #d4d4e8; transition: .15s;
+}
+.stButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(106,90,205,.22); }
+.stButton > button[kind="primary"] {
+  background: linear-gradient(90deg,#6a5acd,#7e57c2); border: none; color: #fff;
+}
+[data-testid="stMetric"] {
+  background: #ffffff; border: 1px solid #ededf7; border-radius: 14px;
+  padding: 12px 16px; box-shadow: 0 2px 10px rgba(60,60,120,.07);
+}
+.hero {
+  background: linear-gradient(120deg,#6a5acd,#7e57c2 55%,#26a69a);
+  border-radius: 18px; padding: 24px 30px; margin-bottom: 18px; color: #fff;
+  box-shadow: 0 10px 30px rgba(106,90,205,.30);
+}
+.hero h1 { color: #fff !important; margin: 0; font-size: 2.05rem; }
+.hero p { color: #f1eeff; margin: .5rem 0 0; font-size: 1.03rem; max-width: 760px; }
+.room-grid {
+  display: grid; grid-template-columns: repeat(auto-fit,minmax(235px,1fr));
+  gap: 14px; margin-top: 6px;
+}
+.room-card {
+  background: #fff; border-radius: 16px; padding: 16px 18px; border: 1px solid #ededf7;
+  box-shadow: 0 4px 16px rgba(60,60,120,.08); transition: .18s;
+}
+.room-card:hover { transform: translateY(-3px); box-shadow: 0 12px 26px rgba(106,90,205,.18); }
+.room-card .emoji { font-size: 1.9rem; }
+.room-card h4 { margin: .35rem 0 .25rem; }
+.algo-tag {
+  display: inline-block; color: #fff; border-radius: 999px; padding: 2px 10px;
+  font-size: .72rem; font-weight: 700; letter-spacing: .02em;
+}
+.room-card p { color: #555; font-size: .88rem; margin: .25rem 0 0; line-height: 1.35; }
+</style>
+"""
+
+_ROOM_CARDS = [
+    ("🟡", "Room 1 · Pacman", "Dynamic Programming", "#f5b301",
+     "Plan the optimal path in a fully-known maze: collect every coin, dodge the guard, escape."),
+    ("💎", "Room 2 · Museum Heist", "SARSA", "#7e57c2",
+     "Steal the diamond and slip past cameras and patrol guards — cautious on-policy learning."),
+    ("🏎️", "Room 3 · Racing", "Q-Learning", "#e53935",
+     "Race to the finish: gamble on the risky oil short-cut or play the long safe line."),
+    ("⚽", "Room 4 · Football", "DQN", "#2e7d32",
+     "Continuous control: dribble past defenders, time the shot, curve the ball past the keeper."),
+    ("🚧", "Room 5 · Obstacles", "DQN + sensors", "#455a64",
+     "Navigate dynamic obstacles with look-ahead sensors, then test on a brand-new random room."),
+]
+
+
+def inject_css() -> None:
+    st.markdown(_CSS, unsafe_allow_html=True)
+
+
 def overview() -> None:
-    st.title("🚪 Reinforcement-Learning Escape Room")
     st.markdown(
-        """
-Escape five themed rooms — each one a different RL problem and algorithm.
-Use the sidebar to enter a room, tune its hyper-parameters, **train** the agent,
-watch the **learning graphs**, and **replay** episodes from different stages of
-training to see what the policy learned.
-        """
+        '<div class="hero"><h1>🚪 Reinforcement-Learning Escape Room</h1>'
+        '<p>Five themed rooms, five RL algorithms. Tune the hyper-parameters, train the '
+        'agent with live learning graphs, and replay exactly what it learned at every stage.</p></div>',
+        unsafe_allow_html=True,
     )
-    st.subheader("The rooms")
-    st.table(
-        {
-            "Room": ["1 · Pacman", "2 · Museum Heist", "3 · Racing", "4 · Football", "5 · Obstacles"],
-            "Algorithm": ["Dynamic Programming", "SARSA", "Q-Learning", "DQN", "DQN + sensors"],
-            "Model": ["Known", "Unknown", "Unknown", "Unknown (continuous)", "Unknown (continuous)"],
-            "Main task": [
-                "Collect all coins, then exit",
-                "Steal the diamond, avoid cameras/traps, escape",
-                "Reach the finish line fast (boosters, mud, oil)",
-                "Dodge defenders & the keeper, then score",
-                "Navigate dynamic obstacles to the exit",
-            ],
-        }
+    cards = "".join(
+        f'<div class="room-card"><div class="emoji">{emoji}</div>'
+        f'<span class="algo-tag" style="background:{color}">{algo}</span>'
+        f'<h4>{title}</h4><p>{desc}</p></div>'
+        for emoji, title, algo, color, desc in _ROOM_CARDS
     )
-    st.info("Each room is self-contained: its hyper-parameters, graphs and replay "
-            "live on its own page. Start with Room 1 on the left. ⬅️")
+    st.markdown(f'<div class="room-grid">{cards}</div>', unsafe_allow_html=True)
+    st.write("")
+    st.info("Pick a room from the sidebar ⬅️ — each is self-contained with its own "
+            "parameters, graphs and episode replay. Room 1 is the gentlest start.")
 
 
 def main() -> None:
+    inject_css()
     st.sidebar.title("🚪 Escape Room")
     choice = st.sidebar.radio("Select a room", list(ROOMS.keys()), label_visibility="collapsed")
     st.sidebar.markdown("---")

@@ -84,6 +84,17 @@ def train(
     result = TrainResult()
     result.extra["mean |TD error|"] = []
 
+    # per-episode counters pulled from the env's ``info`` dict (only the ones that
+    # actually occur are surfaced as learning graphs at the end)
+    count_labels = {
+        "camera": "Camera detections / episode",
+        "caught": "Times caught by guards / episode",
+        "trap": "Trap hits / episode",
+        "crash": "Crashes / episode",
+        "shortcut": "Shortcut tiles used / episode",
+    }
+    count_series: Dict[str, List[float]] = {k: [] for k in count_labels}
+
     milestones = {}
     for frac, label in zip(snapshot_fracs, snapshot_labels):
         milestones[max(1, int(round(frac * episodes)))] = label
@@ -94,6 +105,7 @@ def train(
         action = eps_greedy(Q[state], eps, rng)
         done, total, steps, td_abs = False, 0.0, 0, 0.0
         info = {}
+        ep_counts = {k: 0 for k in count_labels}
         frames = []
         if record_replays:
             frames.append(dict(env.render_state(), step=0, reward=0.0,
@@ -101,6 +113,9 @@ def train(
         while not done and steps < max_steps:
             action_taken = action
             nstate, reward, done, info = env.step(action)
+            for k in count_labels:
+                if info.get(k):
+                    ep_counts[k] += 1
             if algo == "sarsa":
                 naction = eps_greedy(Q[nstate], eps, rng)
                 target = reward + (0.0 if done else gamma * Q[nstate][naction])
@@ -122,6 +137,8 @@ def train(
         if record_replays:
             result.episode_replays.append(frames)
         result.extra["mean |TD error|"].append(td_abs / max(steps, 1))
+        for k in count_labels:
+            count_series[k].append(ep_counts[k])
 
         if (ep + 1) in milestones:
             label = milestones[ep + 1]
@@ -129,6 +146,11 @@ def train(
 
         if progress_cb is not None:
             progress_cb(ep + 1, episodes, result)
+
+    # surface only the counters that actually occurred during training
+    for key, label in count_labels.items():
+        if any(count_series[key]):
+            result.extra[label] = count_series[key]
 
     result.policy = {s: q.copy() for s, q in Q.items()}
     result.info["n_states_seen"] = len(Q)

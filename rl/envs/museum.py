@@ -27,7 +27,7 @@ from __future__ import annotations
 import random
 from typing import List, Tuple
 
-from rl.envs.grid_base import ACTIONS, GridBase
+from rl.envs.grid_base import ACTIONS, GridBase, path_length, reachable, shortest_path
 
 Cell = Tuple[int, int]
 
@@ -82,6 +82,21 @@ def _put(layout: List[List[str]], cell: Cell, ch: str) -> None:
     layout[cell[0]][cell[1]] = ch
 
 
+def museum_guard_route(start: Cell, walls, exit_cell: Cell, rows: int, cols: int) -> List[Cell]:
+    """Fixed back-and-forth patrol along the longest free row/column run through
+    ``start`` (shared by the env and the layout generator)."""
+    def free(cell: Cell) -> bool:
+        return (0 <= cell[0] < rows and 0 <= cell[1] < cols
+                and cell not in walls and cell != exit_cell)
+
+    row = [(start[0], c) for c in range(start[1] - 2, start[1] + 3) if free((start[0], c))]
+    col = [(r, start[1]) for r in range(start[0] - 2, start[0] + 3) if free((r, start[1]))]
+    route = sorted(set(row if len(row) >= len(col) else col))
+    if len(route) <= 1:
+        return [start]
+    return route + route[-2:0:-1]
+
+
 def generate_museum_layout(
     seed: int = 0,
     n_cameras: int = 9,
@@ -89,45 +104,97 @@ def generate_museum_layout(
     n_slippery: int = 6,
     n_guards: int = 2,
 ) -> List[str]:
-    """Generate a museum by randomising hazards on a fixed connected floorplan."""
+    """Generate a **fresh random museum** every seed.
+
+    Random wall *segments* form different galleries each time; a BFS guarantees
+    the start, diamond and exit stay connected before any hazards (which are all
+    passable) are scattered on top.
+    """
     rng = random.Random(seed)
-    layout = [list(row) for row in MUSEUM_BASE_LAYOUT]
-    start, exit_cell, diamond = (9, 0), (9, 9), (8, 0)
-    reserved = {start, exit_cell, diamond}
-    free = [
-        (r, c)
-        for r, row in enumerate(layout)
-        for c, ch in enumerate(row)
-        if ch == "." and (r, c) not in reserved
-    ]
+    R = C = 10
+    start, exit_cell = (R - 1, 0), (R - 1, C - 1)
 
-    lower_hall = [c for c in free if c[0] >= 8 and c[1] not in (0, 9)]
-    camera_pool = lower_hall + [c for c in free if c[0] >= 5 and c not in lower_hall]
-    cameras = rng.sample(camera_pool, k=min(n_cameras, len(camera_pool)))
-    used = set(cameras) | reserved
-    for cell in cameras:
-        _put(layout, cell, "C")
+    for _attempt in range(400):
+        diamond = (rng.randint(0, 5), rng.randint(1, C - 1))
+        if diamond in (start, exit_cell):
+            continue
+        reserved = {start, exit_cell, diamond}
+        for base in (start, exit_cell, diamond):
+            for dr, dc in ((0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)):
+                reserved.add((base[0] + dr, base[1] + dc))
+        walls = set()
+        for _ in range(rng.randint(6, 10)):
+            length = rng.randint(2, 4)
+            if rng.random() < 0.5:
+                r, c0 = rng.randint(0, R - 1), rng.randint(0, C - length)
+                seg = [(r, c0 + i) for i in range(length)]
+            else:
+                c, r0 = rng.randint(0, C - 1), rng.randint(0, R - length)
+                seg = [(r0 + i, c) for i in range(length)]
+            walls.update(cell for cell in seg if cell not in reserved)
 
-    trap_pool = [c for c in free if c not in used and c[0] >= 3]
-    traps = rng.sample(trap_pool, k=min(n_traps, len(trap_pool)))
-    used.update(traps)
-    for cell in traps:
-        _put(layout, cell, "T")
+        seen = reachable(walls, start, R, C)
+        if diamond not in seen or exit_cell not in seen:
+            continue
+        p_sd = shortest_path(walls, start, diamond, R, C)
+        p_de = shortest_path(walls, diamond, exit_cell, R, C)
+        if not p_sd or not p_de:
+            continue
 
-    slip_pool = [c for c in free if c not in used]
-    slippery = rng.sample(slip_pool, k=min(n_slippery, len(slip_pool)))
-    used.update(slippery)
-    for cell in slippery:
-        _put(layout, cell, "~")
+        # interior cells of the SHORT route → these become the danger we make the
+        # short path pass through (a "wall" of cameras + a trap), with guards nearby.
+        ordered = p_sd + p_de[1:]
+        interior = [c for c in ordered if c not in (start, exit_cell, diamond)]
+        if len(interior) < 5:
+            continue
+        mid = len(interior) // 2
+        span = min(len(interior), max(3, n_cameras + n_traps))
+        lo = max(0, mid - span // 2)
+        stretch = interior[lo:lo + span]
+        traps = stretch[-n_traps:] if n_traps else []
+        cameras = [c for c in stretch if c not in traps]
+        if len(cameras) < 2:
+            continue
+        outside = [c for c in interior if c not in stretch]
+        guard_starts = outside[:n_guards]
 
-    guard_pool = [
-        c for c in free
-        if c not in used and abs(c[0] - start[0]) + abs(c[1] - start[1]) >= 5
-    ]
-    for cell in rng.sample(guard_pool, k=min(n_guards, len(guard_pool))):
-        _put(layout, cell, "P")
+        guard_cells = set()
+        for g in guard_starts:
+            guard_cells.update(museum_guard_route(g, walls, exit_cell, R, C))
+        danger = (set(cameras) | set(traps) | guard_cells) - {start, exit_cell, diamond}
 
-    return ["".join(row) for row in layout]
+        # a danger-free SAFE route must exist and be meaningfully longer
+        s_sd = shortest_path(walls, start, diamond, R, C, extra_blocked=danger)
+        s_de = shortest_path(walls, diamond, exit_cell, R, C, extra_blocked=danger)
+        if not s_sd or not s_de:
+            continue
+        short_len = path_length(p_sd) + path_length(p_de)
+        safe_len = path_length(s_sd) + path_length(s_de)
+        if safe_len - short_len < 3:
+            continue
+
+        layout = [["." for _ in range(C)] for _ in range(R)]
+        for cell in walls:
+            _put(layout, cell, "#")
+        for cell in cameras:
+            _put(layout, cell, "C")
+        for cell in traps:
+            _put(layout, cell, "T")
+        for cell in guard_starts:
+            _put(layout, cell, "P")
+        # icy tiles only off the safe route, for flavour
+        safe_cells = set(s_sd) | set(s_de) | danger | {start, exit_cell, diamond}
+        slip_pool = [(r, c) for r in range(R) for c in range(C)
+                     if layout[r][c] == "." and (r, c) not in safe_cells]
+        rng.shuffle(slip_pool)
+        for cell in slip_pool[:n_slippery]:
+            _put(layout, cell, "~")
+        _put(layout, start, "S")
+        _put(layout, exit_cell, "X")
+        _put(layout, diamond, "G")
+        return ["".join(row) for row in layout]
+
+    return [row[:] for row in EASY_LAYOUT]  # guaranteed-valid fallback
 
 LAYOUTS = {"Museum maze (hard)": HARD_LAYOUT, "Open hall (easy)": EASY_LAYOUT}
 DEFAULT_LAYOUT = HARD_LAYOUT
@@ -141,12 +208,13 @@ class MuseumEnv:
         max_steps: int = 200,
         r_step: float = -1.0,
         r_diamond: float = 30.0,
-        r_exit: float = 100.0,
+        r_exit: float = 120.0,
         r_camera: float = -25.0,
         r_trap: float = -20.0,
-        r_guard: float = -35.0,
+        r_guard: float = -50.0,
         r_slip: float = -5.0,
-        r_exit_early: float = -5.0,
+        r_wall: float = -5.0,
+        r_exit_early: float = -10.0,
         seed: int = None,
     ) -> None:
         self.layout = layout or DEFAULT_LAYOUT
@@ -159,6 +227,7 @@ class MuseumEnv:
         self.r_trap = r_trap
         self.r_guard = r_guard
         self.r_slip = r_slip
+        self.r_wall = r_wall
         self.r_exit_early = r_exit_early
         self.max_steps = max_steps
         self.rng = random.Random(seed)
@@ -203,16 +272,7 @@ class MuseumEnv:
 
     # -- patrol guards ------------------------------------------------------
     def _guard_route(self, start: Cell) -> List[Cell]:
-        def free(cell: Cell) -> bool:
-            return self.grid.in_bounds(cell) and cell not in self.walls and cell != self.exit
-
-        row = [(start[0], c) for c in range(start[1] - 2, start[1] + 3) if free((start[0], c))]
-        col = [(r, start[1]) for r in range(start[0] - 2, start[0] + 3) if free((r, start[1]))]
-        route = row if len(row) >= len(col) else col
-        route = sorted(set(route))
-        if len(route) <= 1:
-            return [start]
-        return route + route[-2:0:-1]
+        return museum_guard_route(start, self.walls, self.exit, self.rows, self.cols)
 
     def guard_positions(self, phase: int = None) -> List[Cell]:
         if phase is None:
@@ -233,20 +293,19 @@ class MuseumEnv:
         return self._state()
 
     def step(self, action: int):
-        ncell, slipped = self.grid.sample_cell(self.pos, action, self.rng)
+        ncell, slipped, hit_wall = self.grid.sample_cell(self.pos, action, self.rng)
         reward = self.r_step
         if slipped:
             reward += self.r_slip
-        caught = False
-        success = False
-        guard_hit = False
-        old_guards = set(self.guard_positions())
+        if hit_wall:
+            reward += self.r_wall
 
-        if ncell in self.cameras:           # alarm: penalty + dragged to start
+        camera = ncell in self.cameras
+        trap = ncell in self.traps
+        success = False
+        if camera:                           # camera vision zone: penalty, NOT terminal
             reward += self.r_camera
-            ncell = self.start
-            caught = True
-        elif ncell in self.traps:
+        elif trap:
             reward += self.r_trap
         elif ncell == self.diamond and not self.has_diamond:
             reward += self.r_diamond
@@ -259,17 +318,20 @@ class MuseumEnv:
                 reward += self.r_exit_early
                 ncell = self.pos
 
+        # patrol guards advance; being caught ends the heist
+        old_guards = set(self.guard_positions())
         self.guard_phase = (self.guard_phase + 1) % self.guard_period
         new_guards = set(self.guard_positions())
+        caught = False
         if not success and (ncell in old_guards or ncell in new_guards):
             reward += self.r_guard
-            ncell = self.start
-            guard_hit = True
+            caught = True
 
         self.pos = ncell
         self.steps += 1
-        done = success or self.steps >= self.max_steps
-        info = {"slipped": slipped, "caught": caught, "guard_hit": guard_hit, "success": success}
+        done = success or caught or self.steps >= self.max_steps
+        info = {"slipped": slipped, "hit_wall": hit_wall, "camera": camera,
+                "trap": trap, "caught": caught, "success": success}
         return self._state(), reward, done, info
 
     # -- rendering helper ---------------------------------------------------

@@ -55,19 +55,33 @@ def greedy_policy(mdp: TabularMDP, V: Dict[State, float], gamma: float) -> Dict[
 def value_iteration(mdp: TabularMDP, gamma: float = 0.95, theta: float = 1e-4,
                     max_iter: int = 1000,
                     iteration_cb: Optional[Callable[[int, Dict[State, float], Dict[State, int]], None]] = None):
-    """Classic value iteration. Returns ``(V, policy, diagnostics)``."""
+    """Classic value iteration. Returns ``(V, policy, diagnostics)``.
+
+    The value update and the greedy-policy extraction share a single sweep (the
+    arg-max is captured while computing the max), which roughly halves the work
+    versus a separate ``greedy_policy`` pass each iteration — important for the
+    larger state spaces (e.g. a chasing guard in Room 1).
+    """
     V = {s: 0.0 for s in mdp.states}
     diag = {"value_delta": [], "start_value": [], "policy_changes": []}
+    default_a = mdp.actions[0]
     prev_policy = None
+    policy: Dict[State, int] = {}
     for _ in range(max_iter):
         delta = 0.0
+        policy = {}
         for s in mdp.states:
             if mdp.is_terminal(s):
+                policy[s] = default_a
                 continue
-            old = V[s]
-            V[s] = max(_q_value(mdp, V, s, a, gamma) for a in mdp.actions)
-            delta = max(delta, abs(old - V[s]))
-        policy = greedy_policy(mdp, V, gamma)
+            best_a, best_q = default_a, float("-inf")
+            for a in mdp.actions:
+                q = _q_value(mdp, V, s, a, gamma)
+                if q > best_q:
+                    best_q, best_a = q, a
+            delta = max(delta, abs(V[s] - best_q))
+            V[s] = best_q
+            policy[s] = best_a
         diag["value_delta"].append(delta)
         diag["start_value"].append(V[mdp.start])
         if prev_policy is not None:
@@ -79,7 +93,7 @@ def value_iteration(mdp: TabularMDP, gamma: float = 0.95, theta: float = 1e-4,
         prev_policy = policy
         if delta < theta:
             break
-    return V, greedy_policy(mdp, V, gamma), diag
+    return V, policy, diag
 
 
 def policy_evaluation(mdp: TabularMDP, policy: Dict[State, int], gamma: float,

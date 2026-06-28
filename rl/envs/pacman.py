@@ -117,10 +117,13 @@ class PacmanEnv:
         r_exit: float = 100.0,
         r_door_early: float = -10.0,
         r_slip: float = -5.0,
+        r_wall: float = -5.0,
         guard_enabled: bool = False,
         guard_start: Cell = None,
         guard_speed: int = 1,
-        r_guard: float = -75.0,
+        guard_mode: str = "chase",
+        r_guard: float = -50.0,
+        patrol_len: int = 5,
         seed: int = None,
     ) -> None:
         self.layout = layout or DEFAULT_LAYOUT
@@ -131,9 +134,12 @@ class PacmanEnv:
         self.r_exit = r_exit
         self.r_door_early = r_door_early
         self.r_slip = r_slip
+        self.r_wall = r_wall
         self.guard_enabled = bool(guard_enabled)
         self.guard_speed = max(1, int(guard_speed))
+        self.guard_mode = guard_mode if guard_mode in ("chase", "patrol") else "chase"
         self.r_guard = r_guard
+        self.patrol_len = max(2, int(patrol_len))
         self.max_steps = max_steps
         self.rng = random.Random(seed)
 
@@ -164,17 +170,25 @@ class PacmanEnv:
         self.grid = GridBase(self.rows, self.cols, walls=walls,
                              slippery=slippery, slip_prob=slip_prob)
 
+        # Fixed, fully-known patrol route (a back-and-forth corridor walk). The
+        # guard's position is a deterministic function of its patrol step, so the
+        # whole thing is compatible with Dynamic Programming.
+        self.guard_route = (self._patrol_route(self.guard_start)
+                            if self.guard_enabled else [self.guard_start])
+        self.guard_period = len(self.guard_route)
+
         # episode state
         self.pos: Cell = self.start
         self.mask: int = self.full_mask
-        self.guard_pos: Cell = self.guard_start
+        self.guard_phase: int = 0
+        self.guard_pos: Cell = self.guard_route[0]
         self.steps: int = 0
 
     # -- helpers ------------------------------------------------------------
     def remaining_coins(self, mask: int) -> List[Cell]:
         return [c for c, i in self.coin_index.items() if (mask >> i) & 1]
 
-    def _apply(self, cell: Cell, mask: int, ncell: Cell, slipped: bool):
+    def _apply(self, cell: Cell, mask: int, ncell: Cell, slipped: bool, hit_wall: bool):
         """Resolve door/coins/escape for one realised move. Returns
         ``(ncell, nmask, reward, terminal, info)``."""
         door_bump = False
@@ -187,6 +201,8 @@ class PacmanEnv:
         reward = self.r_step
         if slipped:
             reward += self.r_slip
+        if hit_wall:
+            reward += self.r_wall
         if door_bump:
             reward += self.r_door_early
         idx = self.coin_index.get(ncell)
@@ -195,63 +211,131 @@ class PacmanEnv:
             reward += self.r_coin
         if escaped:
             reward += self.r_exit
-        return ncell, nmask, reward, escaped, {"slipped": slipped, "door_bump": door_bump}
+        return ncell, nmask, reward, escaped, {"slipped": slipped, "door_bump": door_bump,
+                                               "hit_wall": hit_wall}
 
-    def _move_guard_once(self, guard: Cell, target: Cell) -> Cell:
+    # -- fixed patrol guard -------------------------------------------------
+    def _patrol_route(self, start: Cell) -> List[Cell]:
+        """A deterministic back-and-forth corridor patrol through ``start``.
+
+        The route is fully known and never depends on the agent, so it stays
+        compatible with Dynamic Programming.
+        """
+        def free(c: Cell) -> bool:
+            return (self.grid.in_bounds(c) and c not in self.walls
+                    and c != self.door and c not in self.coin_index and c != self.start)
+
+        row = [start]
+        c = start[1] - 1
+        while free((start[0], c)):
+            row.insert(0, (start[0], c)); c -= 1
+        c = start[1] + 1
+        while free((start[0], c)):
+            row.append((start[0], c)); c += 1
+        col = [start]
+        r = start[0] - 1
+        while free((r, start[1])):
+            col.insert(0, (r, start[1])); r -= 1
+        r = start[0] + 1
+        while free((r, start[1])):
+            col.append((r, start[1])); r += 1
+
+        seg = row if len(row) >= len(col) else col
+        seg = seg[:max(2, self.patrol_len)]
+        if len(seg) <= 1:
+            return [start]
+        # ping-pong so the guard oscillates along the corridor
+        return seg + seg[-2:0:-1]
+
+    def guard_at(self, phase: int) -> Cell:
+        return self.guard_route[phase % self.guard_period]
+
+    def _next_phase(self, phase: int) -> int:
+        return (phase + self.guard_speed) % self.guard_period
+
+    def _resolve_guard(self, cell: Cell, ncell: Cell, phase: int, escaped: bool):
+        """Advance the patrol one step and test for a catch.
+
+        Caught if the agent lands on the guard's new cell, or if the two swap
+        cells (cross past each other). Returns ``(next_phase, caught)``.
+        """
+        nphase = self._next_phase(phase)
+        if escaped:
+            return nphase, False
+        g_old = self.guard_at(phase)
+        g_new = self.guard_at(nphase)
+        caught = (ncell == g_new) or (ncell == g_old and g_new == cell)
+        return nphase, caught
+
+    # -- reactive (chasing) guard -------------------------------------------
+    def _chase_once(self, guard: Cell, target: Cell) -> Cell:
+        """One deterministic greedy step that minimises distance to the player."""
         candidates = [guard]
         for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             nb = (guard[0] + dr, guard[1] + dc)
             if self.grid.in_bounds(nb) and nb not in self.walls and nb != self.door:
                 candidates.append(nb)
-        return min(
-            candidates,
-            key=lambda c: (abs(c[0] - target[0]) + abs(c[1] - target[1]), c[0], c[1]),
-        )
+        return min(candidates,
+                   key=lambda c: (abs(c[0] - target[0]) + abs(c[1] - target[1]), c[0], c[1]))
 
-    def _move_guard(self, guard: Cell, target: Cell) -> Cell:
+    def _chase(self, guard: Cell, target: Cell) -> Cell:
         for _ in range(self.guard_speed):
-            guard = self._move_guard_once(guard, target)
+            guard = self._chase_once(guard, target)
             if guard == target:
                 break
         return guard
 
-    def _state(self):
-        if self.guard_enabled:
-            return (self.pos, self.mask, self.guard_pos)
-        return (self.pos, self.mask)
+    def _resolve_chase(self, cell: Cell, ncell: Cell, guard: Cell, escaped: bool):
+        """Move the chasing guard toward the player's new cell; test for a catch.
 
-    def _apply_guard(self, cell: Cell, mask: int, guard: Cell, ncell: Cell, slipped: bool):
-        ncell, nmask, reward, escaped, info = self._apply(cell, mask, ncell, slipped)
-        caught = False
-        nguard = guard
-        if self.guard_enabled and not escaped:
-            if ncell == guard:
-                caught = True
-            else:
-                nguard = self._move_guard(guard, ncell)
-                caught = nguard == ncell
-            if caught:
-                reward += self.r_guard
-        info["caught"] = caught
-        return ncell, nmask, nguard, reward, escaped, caught, info
+        Deterministic (a fixed function of the state) → still DP-compatible, with
+        the guard's *position* carried in the state. Returns ``(next_guard, caught)``.
+        """
+        if escaped:
+            return guard, False
+        if ncell == guard:                       # walked straight into the guard
+            return guard, True
+        nguard = self._chase(guard, ncell)
+        caught = (nguard == ncell) or (nguard == cell and guard == ncell)
+        return nguard, caught
+
+    def _state(self):
+        if not self.guard_enabled:
+            return (self.pos, self.mask)
+        if self.guard_mode == "chase":
+            return (self.pos, self.mask, self.guard_pos)
+        return (self.pos, self.mask, self.guard_phase)
 
     # -- sampling interface (for replay / model-free comparison) -----------
     def reset(self):
         self.pos = self.start
         self.mask = self.full_mask
-        self.guard_pos = self.guard_start
+        self.guard_phase = 0
+        self.guard_pos = self.guard_start if self.guard_mode == "chase" else self.guard_at(0)
         self.steps = 0
         return self._state()
 
     def step(self, action: int):
-        ncell, slipped = self.grid.sample_cell(self.pos, action, self.rng)
-        ncell, nmask, nguard, reward, escaped, caught, info = self._apply_guard(
-            self.pos, self.mask, self.guard_pos, ncell, slipped
+        ncell, slipped, hit_wall = self.grid.sample_cell(self.pos, action, self.rng)
+        ncell, nmask, reward, escaped, info = self._apply(
+            self.pos, self.mask, ncell, slipped, hit_wall
         )
-        self.pos, self.mask, self.guard_pos = ncell, nmask, nguard
+        caught = False
+        if self.guard_enabled:
+            if self.guard_mode == "chase":
+                self.guard_pos, caught = self._resolve_chase(
+                    self.pos, ncell, self.guard_pos, escaped)
+            else:
+                self.guard_phase, caught = self._resolve_guard(
+                    self.pos, ncell, self.guard_phase, escaped)
+                self.guard_pos = self.guard_at(self.guard_phase)
+            if caught:
+                reward += self.r_guard
+        info["caught"] = caught
+        info["escaped"] = escaped
+        self.pos, self.mask = ncell, nmask
         self.steps += 1
         done = escaped or caught or self.steps >= self.max_steps
-        info["escaped"] = escaped
         return self._state(), reward, done, info
 
     # -- explicit model (for Dynamic Programming) --------------------------
@@ -259,44 +343,68 @@ class PacmanEnv:
         free_cells = [(r, c) for r in range(self.rows) for c in range(self.cols)
                       if (r, c) not in self.walls]
         n_masks = 1 << len(self.coins)
-        if self.guard_enabled:
-            states = [
-                (cell, mask, guard)
-                for mask in range(n_masks)
-                for cell in free_cells
-                for guard in free_cells
-            ]
-            terminals = {
-                s for s in states
-                if (s[0] == self.door and s[1] == 0) or s[0] == s[2]
-            }
-            start = (self.start, self.full_mask, self.guard_start)
-        else:
-            states = [(cell, mask) for mask in range(n_masks) for cell in free_cells]
-            terminal = (self.door, 0)
-            terminals = {terminal}
-            start = (self.start, self.full_mask)
 
-        P: Dict = {}
-        for state in states:
-            if self.guard_enabled:
-                cell, mask, guard = state
-            else:
+        if not self.guard_enabled:
+            states = [(cell, mask) for mask in range(n_masks) for cell in free_cells]
+            terminals = {(self.door, 0)}
+            start = (self.start, self.full_mask)
+            P: Dict = {}
+            for state in states:
                 cell, mask = state
-                guard = self.guard_start
+                P[state] = {}
+                if state in terminals:
+                    for a in ACTIONS:
+                        P[state][a] = [(1.0, state, 0.0, True)]
+                    continue
+                for a in ACTIONS:
+                    outs = []
+                    for prob, ncell, slipped, hit_wall in self.grid.cell_transitions(cell, a):
+                        rc, rmask, reward, escaped, _ = self._apply(
+                            cell, mask, ncell, slipped, hit_wall)
+                        outs.append((prob, (rc, rmask), reward, escaped))
+                    P[state][a] = outs
+            return TabularMDP(states=states, actions=ACTIONS, P=P,
+                              start=start, terminals=terminals)
+
+        # --- guard enabled: state = (cell, mask, guard_rep) ----------------
+        # guard_rep is the guard's CELL in chase mode, or its patrol PHASE in
+        # patrol mode; both are deterministic functions of the state, so DP works.
+        CAUGHT = "CAUGHT"  # single absorbing "game over" state
+        if self.guard_mode == "chase":
+            guard_reps = free_cells
+            start_g = self.guard_start
+            resolve = self._resolve_chase
+        else:
+            guard_reps = list(range(self.guard_period))
+            start_g = 0
+            resolve = self._resolve_guard
+
+        states = [(cell, mask, g) for mask in range(n_masks)
+                  for cell in free_cells for g in guard_reps]
+        states.append(CAUGHT)
+        terminals = {s for s in states
+                     if s != CAUGHT and s[0] == self.door and s[1] == 0}
+        terminals.add(CAUGHT)
+        start = (self.start, self.full_mask, start_g)
+
+        P = {}
+        for state in states:
             P[state] = {}
             if state in terminals:
                 for a in ACTIONS:
                     P[state][a] = [(1.0, state, 0.0, True)]
                 continue
+            cell, mask, g = state
             for a in ACTIONS:
                 outs = []
-                for prob, ncell, slipped in self.grid.cell_transitions(cell, a):
-                    rc, rmask, rguard, reward, escaped, caught, _ = self._apply_guard(
-                        cell, mask, guard, ncell, slipped
-                    )
-                    nstate = (rc, rmask, rguard) if self.guard_enabled else (rc, rmask)
-                    outs.append((prob, nstate, reward, escaped or caught))
+                for prob, ncell, slipped, hit_wall in self.grid.cell_transitions(cell, a):
+                    rc, rmask, reward, escaped, _ = self._apply(
+                        cell, mask, ncell, slipped, hit_wall)
+                    ng, caught = resolve(cell, rc, g, escaped)
+                    if caught:
+                        outs.append((prob, CAUGHT, reward + self.r_guard, True))
+                    else:
+                        outs.append((prob, (rc, rmask, ng), reward, escaped))
                 P[state][a] = outs
         return TabularMDP(states=states, actions=ACTIONS, P=P,
                           start=start, terminals=terminals)

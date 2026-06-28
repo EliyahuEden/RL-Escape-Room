@@ -94,13 +94,13 @@ def render() -> None:
 
     with st.sidebar:
         st.header("⚙️ DQN parameters")
-        episodes = st.slider("Episodes", 100, 2000, 600, 50)
+        episodes = st.slider("Episodes", 100, 2000, 800, 50)
         hidden = HIDDEN_CHOICES[st.selectbox("Hidden layers", list(HIDDEN_CHOICES), index=1)]
         lr = st.select_slider("Learning rate", [1e-4, 3e-4, 1e-3, 3e-3], value=1e-3)
         gamma = st.slider("Discount γ", 0.80, 0.999, 0.99, 0.005)
         batch_size = st.select_slider("Batch size", [32, 64, 128, 256], value=64)
         eps_end = st.slider("ε end", 0.0, 0.3, 0.05, 0.01)
-        expl = st.slider("Exploration fraction", 0.1, 1.0, 0.5, 0.05)
+        expl = st.slider("Exploration fraction", 0.1, 1.0, 0.6, 0.05)
         max_steps = st.slider("Shot clock (steps per attempt)", 60, 300, 120, 20)
         seed = st.number_input("Random seed", value=0, step=1)
         st.markdown("**Difficulty**")
