@@ -304,3 +304,247 @@ class FootballEnv:
         if self._flight is not None:
             state["flight"] = self._flight
         return state
+
+
+# ─── Free Kick Mode ─────────────────────────────────────────────────────────
+
+_FK_AIMS = ("low", "mid", "high")
+_FK_POWERS = ("soft", "hard")
+_FK_CURVES = ("left", "straight", "right")
+
+def _fk_action_table():
+    table = {}
+    idx = 0
+    for aim in _FK_AIMS:
+        for power in _FK_POWERS:
+            for curve in _FK_CURVES:
+                table[idx] = (aim, power, curve)
+                idx += 1
+    return table
+
+_FK_ACTIONS = _fk_action_table()
+
+
+class FreeKickEnv:
+    """Free kick: the player stands at a fixed spot and kicks the ball toward
+    the goal.  A **wall** of defenders stands between the player and the goal,
+    and a keeper patrols the goal mouth.
+
+    The ball has 3D physics: it travels in (x, y) on the pitch and also rises
+    and falls in z (height).  High shots arc over the wall but are slower and
+    less accurate; low shots are fast but can be blocked by the wall.  Curve
+    bends the ball sideways (Magnus effect) to go around the keeper.
+
+    Actions (18): 3 aims (low/mid/high) × 2 powers (soft/hard) × 3 curves
+    (left/straight/right).  Each episode is a single kick — the agent picks
+    one action and the ball flight resolves immediately.
+    """
+
+    def __init__(
+        self,
+        n_wall: int = 3,
+        kick_x: float = 5.0,
+        kick_y: float = 5.0,
+        wall_x: float = 7.5,
+        keeper_speed: float = 1.5,
+        keeper_reach: float = 0.7,
+        soft_speed: float = 7.0,
+        hard_speed: float = 13.0,
+        curve_acc: float = 14.0,
+        max_flight_ticks: int = 250,
+        wall_height: float = 1.2,
+        wall_block_radius: float = 0.3,
+        r_goal: float = 300.0,
+        r_save: float = 20.0,
+        r_miss: float = -15.0,
+        r_blocked: float = -30.0,
+        r_post: float = -5.0,
+        max_attempts: int = 5,
+        randomize: bool = True,
+        seed: Optional[int] = None,
+    ) -> None:
+        self.W = self.H = 10.0
+        self.goal_lo, self.goal_hi = 3.5, 6.5
+        self.goal_cy = 0.5 * (self.goal_lo + self.goal_hi)
+        self.keeper_x_pos = self.W - 0.3
+        self.k_lo = self.goal_lo + 0.3
+        self.k_hi = self.goal_hi - 0.3
+        self.n_wall = int(n_wall)
+        self.kick_x_base = kick_x
+        self.kick_y_base = kick_y
+        self.kick_x = kick_x
+        self.kick_y = kick_y
+        self.wall_x_offset = 2.0
+        self.wall_x = wall_x
+        self.keeper_speed = keeper_speed
+        self.keeper_reach = keeper_reach
+        self.power = {"soft": soft_speed, "hard": hard_speed}
+        self.curve_acc = curve_acc
+        self.max_flight_ticks = max_flight_ticks
+        self.wall_height = wall_height
+        self.wall_block_radius = wall_block_radius
+        self.r_goal = r_goal
+        self.r_save = r_save
+        self.r_miss = r_miss
+        self.r_blocked = r_blocked
+        self.r_post = r_post
+        self.randomize = randomize
+        self.rng = random.Random(seed)
+
+        self.max_attempts = max_attempts
+        self.attempts = 0
+        self.dt = 0.02
+        self.n_actions = len(_FK_ACTIONS)
+        self.obs_dim = 4 + 2 * self.n_wall
+        self.reset()
+
+    def _spawn_wall(self) -> List[List[float]]:
+        center = self.kick_y
+        spacing = 0.9
+        wall = []
+        for i in range(self.n_wall):
+            wy = center + (i - (self.n_wall - 1) / 2.0) * spacing
+            if self.randomize:
+                wy += self.rng.uniform(-0.15, 0.15)
+            wall.append([self.wall_x, min(max(wy, 1.0), self.H - 1.0)])
+        return wall
+
+    def reset(self):
+        self.wall_x = self.kick_x + self.wall_x_offset
+        self.wall_x = min(self.wall_x, self.W - 1.5)
+        self.keeper_y = self.goal_cy
+        self.kdir = 1.0 if self.rng.random() < 0.5 else -1.0
+        self.wall_players = self._spawn_wall()
+        self.attempts = 0
+        self._flight = None
+        return self._obs()
+
+    def _obs(self) -> np.ndarray:
+        feats = [
+            (self.keeper_y - self.goal_lo) / (self.goal_hi - self.goal_lo),
+            self.kdir,
+            self.kick_x / self.W,
+            self.kick_y / self.H,
+        ]
+        for wx, wy in self.wall_players:
+            feats += [(wx - self.kick_x) / self.W, (wy - self.kick_y) / self.H]
+        return np.asarray(feats, dtype=np.float32)
+
+    def _resolve_kick(self, aim: str, power_key: str, curve_dir: str):
+        speed = self.power[power_key]
+        curve_sign = {"left": -1.0, "straight": 0.0, "right": 1.0}[curve_dir]
+
+        launch_angles = {"low": 5.0, "mid": 18.0, "high": 32.0}
+        angle_deg = launch_angles[aim]
+        if self.randomize:
+            angle_deg += self.rng.uniform(-2.0, 2.0)
+        angle_rad = math.radians(angle_deg)
+
+        horiz_speed = speed * math.cos(angle_rad)
+        vz = speed * math.sin(angle_rad)
+
+        target_y = min(max(self.kick_y, self.goal_lo + 0.2), self.goal_hi - 0.2)
+        dvec = np.array([self.W - self.kick_x, target_y - self.kick_y], dtype=float)
+        n = np.linalg.norm(dvec) or 1.0
+        vel = dvec / n * horiz_speed
+
+        bx, by, bz = self.kick_x, self.kick_y, 0.0
+        gravity = 9.8
+        flight = [{"ball": (bx, by), "ball_z": bz,
+                   "keeper": (self.keeper_x_pos, self.keeper_y)}]
+        outcome = "miss"
+
+        for _ in range(self.max_flight_ticks):
+            v = math.hypot(*vel) or 1.0
+            perp = np.array([-vel[1], vel[0]]) / v
+            vel = vel + curve_sign * self.curve_acc * perp * self.dt
+
+            bx += vel[0] * self.dt
+            by += vel[1] * self.dt
+            vz -= gravity * self.dt
+            bz += vz * self.dt
+            if bz < 0:
+                bz = 0.0
+
+            self.keeper_y += self.keeper_speed * self.dt * self.kdir
+            if self.keeper_y < self.k_lo:
+                self.keeper_y = self.k_lo
+                self.kdir = 1.0
+            elif self.keeper_y > self.k_hi:
+                self.keeper_y = self.k_hi
+                self.kdir = -1.0
+
+            flight.append({"ball": (bx, by), "ball_z": bz,
+                           "keeper": (self.keeper_x_pos, self.keeper_y)})
+
+            for wx, wy in self.wall_players:
+                if (abs(bx - wx) < self.wall_block_radius and
+                        abs(by - wy) < self.wall_block_radius and
+                        bz < self.wall_height):
+                    self._flight = flight
+                    return "blocked"
+
+            if bx >= self.keeper_x_pos and bz < 2.5:
+                if abs(by - self.keeper_y) <= self.keeper_reach:
+                    outcome = "save"
+                    break
+
+            if bx >= self.W:
+                if self.goal_lo <= by <= self.goal_hi and bz < 2.44:
+                    outcome = "goal"
+                else:
+                    outcome = "miss"
+                break
+
+            if by < 0 or by > self.H or bx < 0:
+                outcome = "miss"
+                break
+
+        self._flight = flight
+        return outcome
+
+    def step(self, action: int):
+        aim, power_key, curve_dir = _FK_ACTIONS[action]
+        outcome = self._resolve_kick(aim, power_key, curve_dir)
+        self.attempts += 1
+
+        if outcome == "goal":
+            reward = self.r_goal
+            event = "GOAL!"
+            success = True
+            done = True
+        elif outcome == "save":
+            reward = self.r_save
+            event = "Saved by the keeper!"
+            success = False
+            done = self.attempts >= self.max_attempts
+        elif outcome == "blocked":
+            reward = self.r_blocked
+            event = "Blocked by the wall!"
+            success = False
+            done = self.attempts >= self.max_attempts
+        else:
+            reward = self.r_miss
+            event = "Missed the goal!"
+            success = False
+            done = self.attempts >= self.max_attempts
+
+        if done and not success:
+            event += " (out of attempts)"
+
+        info = {"success": success, "event": event, "outcome": outcome,
+                "kick": (aim, power_key, curve_dir)}
+        return self._obs(), reward, done, info
+
+    def render_state(self) -> dict:
+        state = {
+            "x": self.kick_x, "y": self.kick_y, "vx": 0, "vy": 0,
+            "ball": (self.kick_x, self.kick_y), "ball_in_flight": False,
+            "defenders": [tuple(w) for w in self.wall_players],
+            "keeper": (self.keeper_x_pos, self.keeper_y),
+            "in_shoot": True,
+            "mode": "freekick",
+        }
+        if self._flight is not None:
+            state["flight"] = self._flight
+        return state
