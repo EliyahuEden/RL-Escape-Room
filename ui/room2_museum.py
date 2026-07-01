@@ -11,6 +11,8 @@ from rl.algos import sarsa
 from rl.envs.museum import DEFAULT_LAYOUT, MuseumEnv, generate_museum_layout, museum_layout_stats
 from ui.common import episode_replay_player, learning_section, train_with_live_progress
 from ui.render import render_grid
+from ui_canvas.toggle import use_canvas
+from ui_canvas.room2_museum import draw_museum_canvas, replay_museum_canvas, frame_to_canvas as _museum_frame
 
 
 def _draw(env: MuseumEnv, frame: dict):
@@ -125,7 +127,10 @@ def render() -> None:
     left, right = st.columns([1, 1])
     with left:
         st.subheader("Museum floor plan")
-        st.pyplot(_draw(env, env.render_state()), clear_figure=True)
+        if use_canvas():
+            draw_museum_canvas(env, env.render_state())
+        else:
+            st.pyplot(_draw(env, env.render_state()), clear_figure=True)
         st.caption(f"{len(env.cameras)} camera zones · "
                    f"{len(env.traps)} traps · {len(env.slippery)} marble tiles · "
                    f"{len(env.guard_starts)} guards")
@@ -163,9 +168,16 @@ def render() -> None:
         st.subheader("📈 Learning & exploration graphs")
         learning_section(result)
         st.subheader("🎞️ Replay any heist attempt")
-        episode_replay_player(
-            result,
-            lambda f: _draw(trained_env, f),
-            key="room2_all_episodes",
-            caption="Pick any training episode — watch the robber sneak, get caught, or escape cleanly.",
-        )
+        if use_canvas() and result.episode_replays:
+            n = len(result.episode_replays)
+            ep = st.slider("Episode", 1, n, n, key="room2_ep_sel") - 1
+            raw = result.episode_replays[ep]
+            if raw:
+                replay_museum_canvas(trained_env, raw, key=f"room2_cv_{ep}")
+        else:
+            episode_replay_player(
+                result,
+                lambda f: _draw(trained_env, f),
+                key="room2_all_episodes",
+                caption="Pick any training episode — watch the robber sneak, get caught, or escape cleanly.",
+            )

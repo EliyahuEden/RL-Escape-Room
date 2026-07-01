@@ -11,6 +11,8 @@ from rl.algos import dqn
 from rl.envs.obstacles import ObstacleEnv
 from ui.common import episode_replay_player, learning_section, replay_player, train_with_live_progress
 from ui.render import field_axes
+from ui_canvas.toggle import use_canvas
+from ui_canvas.room5_obstacles import draw_chicken_canvas, replay_chicken_canvas
 
 HIDDEN_CHOICES = {"64, 64": (64, 64), "128, 128": (128, 128), "256, 128": (256, 128)}
 
@@ -168,7 +170,11 @@ def render() -> None:
     left, right = st.columns([1, 1])
     with left:
         st.subheader("Road crossing")
-        st.pyplot(_draw(env, env.render_state() | {"event": "Start"}), clear_figure=True)
+        _start_frame = env.render_state() | {"event": "Start"}
+        if use_canvas():
+            draw_chicken_canvas(env, _start_frame, title="Start")
+        else:
+            st.pyplot(_draw(env, _start_frame), clear_figure=True)
         st.caption(f"{n_cars} cars · traffic {traffic_speed:.2f} m/s · "
                    f"sensor range {sensor_range} m · sensing {max_sensed} nearest")
 
@@ -210,12 +216,19 @@ def render() -> None:
         st.subheader("📈 Learning graphs")
         learning_section(result)
         st.subheader("🎞️ Replay any training episode")
-        episode_replay_player(
-            result,
-            lambda f: _draw(trained_env, f),
-            key="room5_all_episodes",
-            caption="Pick any DQN training episode and watch the chicken react to moving traffic.",
-        )
+        if use_canvas() and result.episode_replays:
+            n = len(result.episode_replays)
+            ep = st.slider("Episode", 1, n, n, key="room5_ep_sel") - 1
+            raw = result.episode_replays[ep]
+            if raw:
+                replay_chicken_canvas(trained_env, raw, key=f"room5_cv_{ep}")
+        else:
+            episode_replay_player(
+                result,
+                lambda f: _draw(trained_env, f),
+                key="room5_all_episodes",
+                caption="Pick any DQN training episode and watch the chicken react to moving traffic.",
+            )
 
         st.subheader("🎲 Test the learned policy on brand-new traffic")
         c1, c2 = st.columns([1, 3])

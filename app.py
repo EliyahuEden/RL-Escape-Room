@@ -130,6 +130,7 @@ def main() -> None:
     st.sidebar.title("🚪 Escape Room")
     choice = st.sidebar.radio("Select a room", list(ROOMS.keys()), label_visibility="collapsed")
     st.sidebar.markdown("---")
+    st.sidebar.toggle("🎨 Canvas graphics", value=False, key="canvas_mode")
     st.sidebar.caption("Tune parameters → Train → inspect graphs → replay episodes.")
 
     module_path = ROOMS[choice]

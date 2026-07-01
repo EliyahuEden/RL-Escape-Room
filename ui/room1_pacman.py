@@ -15,6 +15,10 @@ from rl.envs.grid_base import DOWN, LEFT, RIGHT, UP
 from rl.envs.pacman import DEFAULT_LAYOUT, PacmanEnv, generate_pacman_layout
 from ui.common import sequence_replay_player
 from ui.render import render_grid
+from ui_canvas.toggle import use_canvas
+from ui_canvas.room1_pacman import draw_pacman_canvas, replay_pacman_canvas, frame_to_canvas
+from ui_canvas.canvas_core import render_canvas_replay
+from ui_canvas.room1_pacman import DRAW_JS as PACMAN_DRAW_JS
 
 _ARROW = {UP: (0.0, -0.3), DOWN: (0.0, 0.3), LEFT: (-0.3, 0.0), RIGHT: (0.3, 0.0)}
 
@@ -209,9 +213,13 @@ def render() -> None:
     left, right = st.columns([1, 1])
     with left:
         st.subheader("Maze")
-        st.pyplot(_draw(env, {"pos": env.start, "remaining": env.coins,
-                              "guard": env.guard_pos if env.guard_enabled else None,
-                              "escaped": False}), clear_figure=True)
+        _init_frame = {"pos": env.start, "remaining": env.coins,
+                       "guard": env.guard_pos if env.guard_enabled else None,
+                       "escaped": False}
+        if use_canvas():
+            draw_pacman_canvas(env, _init_frame)
+        else:
+            st.pyplot(_draw(env, _init_frame), clear_figure=True)
         st.caption(f"{len(env.coins)} coins · {len(env.slippery)} icy cells · "
                    f"{'guard enabled' if env.guard_enabled else 'no guard'} · start S → door EXIT")
         st.caption(f"Estimated DP states: {estimated_states:,}")
@@ -304,10 +312,17 @@ def render() -> None:
 
         if data.get("iteration_replays"):
             st.subheader("🎞️ Replay every DP iteration")
-            sequence_replay_player(
-                data["iteration_replays"],
-                lambda f: _draw(trained_env, f),
-                key="room1_all_iterations",
-                item_label="Iteration",
-                caption="Pick any DP sweep / policy improvement and animate its greedy rollout.",
+            if use_canvas():
+                n_iter = len(data["iteration_replays"])
+                sel = st.slider("Iteration", 1, n_iter, n_iter, key="room1_iter_sel") - 1
+                raw = data["iteration_replays"][sel]
+                if raw:
+                    replay_pacman_canvas(trained_env, raw, key=f"room1_canvas_{sel}")
+            else:
+                sequence_replay_player(
+                    data["iteration_replays"],
+                    lambda f: _draw(trained_env, f),
+                    key="room1_all_iterations",
+                    item_label="Iteration",
+                    caption="Pick any DP sweep / policy improvement and animate its greedy rollout.",
             )

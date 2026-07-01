@@ -11,6 +11,8 @@ from rl.algos import dqn
 from rl.envs.football import FootballEnv, FreeKickEnv
 from ui.common import episode_replay_player, learning_section, train_with_live_progress
 from ui.render import field_axes
+from ui_canvas.toggle import use_canvas
+from ui_canvas.room4_football import draw_football_canvas, replay_football_canvas
 
 HIDDEN_CHOICES = {"64, 64": (64, 64), "128, 128": (128, 128), "256, 128": (256, 128)}
 
@@ -151,7 +153,11 @@ def _render_dribble() -> None:
     left, right = st.columns([1, 1])
     with left:
         st.subheader("Pitch")
-        st.pyplot(_draw(env, env.render_state() | {"event": "Kick-off"}), clear_figure=True)
+        _f = env.render_state() | {"event": "Kick-off"}
+        if use_canvas():
+            draw_football_canvas(env, _f, title="Kick-off")
+        else:
+            st.pyplot(_draw(env, _f), clear_figure=True)
         st.caption("Blue = player · white = ball · red = defenders · yellow = keeper "
                    "(patrolling) · dashed line = shooting area")
 
@@ -191,13 +197,20 @@ def _render_dribble() -> None:
         st.subheader("📈 Learning graphs")
         learning_section(result)
         st.subheader("🎞️ Replay any training episode")
-        episode_replay_player(
-            result,
-            lambda f: _draw(trained_env, f),
-            key="room4_all_episodes",
-            caption="Pick any DQN training episode; exploratory shots include the animated ball flight.",
-            frame_transform=_expand_flight,
-        )
+        if use_canvas() and result.episode_replays:
+            n = len(result.episode_replays)
+            ep = st.slider("Episode", 1, n, n, key="room4_ep_sel") - 1
+            raw = _expand_flight(result.episode_replays[ep])
+            if raw:
+                replay_football_canvas(trained_env, raw, key=f"room4_cv_{ep}", expand_flight=False)
+        else:
+            episode_replay_player(
+                result,
+                lambda f: _draw(trained_env, f),
+                key="room4_all_episodes",
+                caption="Pick any DQN training episode; exploratory shots include the animated ball flight.",
+                frame_transform=_expand_flight,
+            )
 
 
 def _render_freekick() -> None:
@@ -249,8 +262,11 @@ def _render_freekick() -> None:
     left, right = st.columns([1, 1])
     with left:
         st.subheader("Free kick setup")
-        st.pyplot(_draw(env, env.render_state() | {"event": "Ready to kick"}),
-                  clear_figure=True)
+        _fk_frame = env.render_state() | {"event": "Ready to kick"}
+        if use_canvas():
+            draw_football_canvas(env, _fk_frame, title="Ready to kick")
+        else:
+            st.pyplot(_draw(env, _fk_frame), clear_figure=True)
         st.caption(f"Blue = kicker at ({kick_x:.1f}, {kick_y:.1f}) · "
                    f"red wall = {n_wall} defenders · yellow = keeper · "
                    f"18 kick actions (3 aims × 2 powers × 3 curves)")
@@ -295,10 +311,17 @@ def _render_freekick() -> None:
         st.subheader("📈 Learning graphs")
         learning_section(result)
         st.subheader("🎞️ Replay any free kick")
-        episode_replay_player(
-            result,
-            lambda f: _draw(trained_env, f),
-            key="room4_fk_episodes",
-            caption="Pick any training kick and watch the ball flight — does it go over the wall? Around the keeper?",
-            frame_transform=_expand_flight,
-        )
+        if use_canvas() and result.episode_replays:
+            n = len(result.episode_replays)
+            ep = st.slider("Episode", 1, n, n, key="room4_fk_ep_sel") - 1
+            raw = _expand_flight(result.episode_replays[ep])
+            if raw:
+                replay_football_canvas(trained_env, raw, key=f"room4_fkcv_{ep}", expand_flight=False)
+        else:
+            episode_replay_player(
+                result,
+                lambda f: _draw(trained_env, f),
+                key="room4_fk_episodes",
+                caption="Pick any training kick and watch the ball flight — does it go over the wall? Around the keeper?",
+                frame_transform=_expand_flight,
+            )

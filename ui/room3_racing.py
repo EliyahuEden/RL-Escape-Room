@@ -14,6 +14,8 @@ from rl.envs.racing import DEFAULT_LAYOUT, RacingEnv, generate_racing_layout, ra
 from ui.common import episode_replay_player, learning_section, train_with_live_progress
 from ui.render import render_grid
 from rl.utils import moving_average
+from ui_canvas.toggle import use_canvas
+from ui_canvas.room3_racing import draw_racing_canvas, replay_racing_canvas
 
 
 def _draw(env: RacingEnv, frame: dict):
@@ -179,7 +181,10 @@ def render() -> None:
     left, right = st.columns([1, 1])
     with left:
         st.subheader("Track")
-        st.pyplot(_draw(env, {"pos": env.start, "bmask": 0}), clear_figure=True)
+        if use_canvas():
+            draw_racing_canvas(env, {"pos": env.start, "bmask": 0})
+        else:
+            st.pyplot(_draw(env, {"pos": env.start, "bmask": 0}), clear_figure=True)
         st.caption(f"{len(env.boosters)} boosters (need {min_boosters}) · "
                    f"{len(env.oil)} oil · {len(env.mud)} mud · "
                    f"{len(env.crash)} crash barriers")
@@ -247,16 +252,30 @@ def render() -> None:
             learning_section(res_q)
 
         st.subheader("🎞️ Replay any race")
-        episode_replay_player(
-            res_q,
-            lambda f: _draw(trained_env, f),
-            key="room3_q_all_episodes",
-            caption="Q-Learning: pick any training race and watch the car collect boosters and race to the finish.",
-        )
-        if store["sarsa"]:
+        if use_canvas() and res_q.episode_replays:
+            n = len(res_q.episode_replays)
+            ep = st.slider("Episode (Q-Learning)", 1, n, n, key="room3_q_ep_sel") - 1
+            raw = res_q.episode_replays[ep]
+            if raw:
+                replay_racing_canvas(trained_env, raw, key=f"room3_qcv_{ep}")
+        else:
             episode_replay_player(
-                store["sarsa"],
+                res_q,
                 lambda f: _draw(trained_env, f),
-                key="room3_sarsa_all_episodes",
-                caption="SARSA: replay any race for comparison.",
+                key="room3_q_all_episodes",
+                caption="Q-Learning: pick any training race and watch the car collect boosters and race to the finish.",
             )
+        if store["sarsa"]:
+            if use_canvas() and store["sarsa"].episode_replays:
+                n2 = len(store["sarsa"].episode_replays)
+                ep2 = st.slider("Episode (SARSA)", 1, n2, n2, key="room3_s_ep_sel") - 1
+                raw2 = store["sarsa"].episode_replays[ep2]
+                if raw2:
+                    replay_racing_canvas(trained_env, raw2, key=f"room3_scv_{ep2}")
+            else:
+                episode_replay_player(
+                    store["sarsa"],
+                    lambda f: _draw(trained_env, f),
+                    key="room3_sarsa_all_episodes",
+                    caption="SARSA: replay any race for comparison.",
+                )
