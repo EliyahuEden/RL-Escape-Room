@@ -4,3 +4,10 @@ __pycache__/
 .streamlit/
 runs/
 .DS_Store
+
+# frontend
+frontend/node_modules/
+frontend/dist/
+
+# training artefacts (models are binary; JSON results may be committed if wanted)
+results/models/

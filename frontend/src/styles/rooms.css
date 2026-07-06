@@ -1,0 +1,304 @@
+/* ============================================================
+   Room-specific styling: level-select cards, per-room accents,
+   room page headers.
+   ============================================================ */
+
+/* per-room accent theme (set on containers via data-room) */
+[data-room='1'] { --accent: var(--gold); --accent-soft: rgba(255, 210, 63, 0.15); }
+[data-room='2'] { --accent: var(--purple); --accent-soft: rgba(167, 139, 250, 0.15); }
+[data-room='3'] { --accent: var(--red); --accent-soft: rgba(255, 77, 90, 0.15); }
+[data-room='4'] { --accent: var(--green); --accent-soft: rgba(52, 211, 153, 0.15); }
+[data-room='5'] { --accent: var(--sky); --accent-soft: rgba(56, 189, 248, 0.15); }
+
+/* ---------- level-select grid ---------- */
+.room-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
+  gap: 20px;
+}
+
+.room-card {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #121a38, #0c1226);
+  overflow: hidden;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.22s, box-shadow 0.22s, border-color 0.22s;
+}
+.room-card:hover {
+  transform: translateY(-5px);
+  border-color: var(--accent);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5), 0 0 30px var(--accent-soft);
+}
+.room-card .card-scene {
+  position: relative;
+  height: 132px;
+  border-bottom: 1px solid var(--line);
+  background:
+    radial-gradient(320px 130px at 50% 115%, var(--accent-soft), transparent 70%),
+    linear-gradient(180deg, #0d1430, #0a0f22);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.room-card .card-scene::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 3px);
+  pointer-events: none;
+}
+.room-card .scene-icon {
+  font-size: 46px;
+  filter: drop-shadow(0 0 18px var(--accent-soft)) drop-shadow(0 6px 12px rgba(0, 0, 0, 0.5));
+  animation: icon-bob 3.2s ease-in-out infinite;
+}
+@keyframes icon-bob {
+  0%, 100% { transform: translateY(2px); }
+  50% { transform: translateY(-4px); }
+}
+.room-card .room-num {
+  position: absolute;
+  top: 8px; right: 12px;
+  font-family: var(--font-display);
+  font-size: 34px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.06);
+}
+.room-card .training-tag {
+  position: absolute;
+  top: 10px; left: 12px;
+}
+
+.room-card .card-body { padding: 15px 16px 16px; display: flex; flex-direction: column; gap: 9px; flex: 1; }
+.room-card .room-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+.room-card .room-name {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin: 0;
+}
+.room-card .room-desc {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  min-height: 38px;
+}
+
+.room-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  margin-top: 2px;
+}
+.room-stat {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  text-align: center;
+}
+.room-stat .val {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.room-stat .val.good { color: var(--green); }
+.room-stat .lbl {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 1px;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-top: 1px;
+}
+
+.card-actions { display: flex; gap: 7px; margin-top: auto; padding-top: 10px; }
+.card-actions .btn { flex: 1; justify-content: center; padding: 8px 6px; font-size: 10.5px; }
+
+.difficulty { color: var(--accent); letter-spacing: 3px; font-size: 12px; }
+.difficulty .off { color: rgba(255, 255, 255, 0.14); }
+
+/* ---------- room page header ---------- */
+.room-header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.room-header h1 {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  margin: 0;
+}
+.room-header .num { color: var(--accent); text-shadow: 0 0 24px var(--accent-soft); }
+
+/* ---------- briefing (overview tab) ---------- */
+.briefing-grid {
+  display: grid;
+  grid-template-columns: minmax(380px, 560px) 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 1050px) { .briefing-grid { grid-template-columns: 1fr; } }
+
+.spec-table { display: flex; flex-direction: column; gap: 10px; }
+.spec-row {
+  display: grid;
+  grid-template-columns: 118px 1fr;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px dashed rgba(44, 55, 104, 0.5);
+  font-size: 13px;
+}
+.spec-row .k {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 1.4px;
+  color: var(--accent);
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.spec-row .v { color: var(--text); line-height: 1.55; }
+
+.legend-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px 14px;
+  font-size: 12.5px;
+}
+.legend-item { display: flex; align-items: center; gap: 9px; color: var(--muted); }
+.legend-swatch {
+  width: 14px; height: 14px;
+  border-radius: 4px;
+  flex: none;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.4);
+}
+
+/* ---------- policy grid ---------- */
+.policy-grid { display: grid; gap: 2px; }
+.policy-cell {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.9);
+  position: relative;
+}
+.policy-cell .val {
+  position: absolute;
+  bottom: 1px; right: 3px;
+  font-size: 8px;
+  font-family: var(--font-mono);
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* ---------- algorithm cards ---------- */
+.algo-card { scroll-margin-top: 84px; }
+.algo-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.algo-head h2 {
+  font-family: var(--font-display);
+  font-size: 21px;
+  letter-spacing: 1px;
+  margin: 0;
+}
+.algo-badge {
+  width: 42px; height: 42px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  font-size: 21px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 18px var(--accent-soft);
+}
+
+/* ---------- home hero ---------- */
+.hero {
+  position: relative;
+  padding: 68px 20px 54px;
+  text-align: center;
+}
+.hero h1 {
+  font-family: var(--font-display);
+  font-size: clamp(34px, 5.2vw, 58px);
+  font-weight: 700;
+  letter-spacing: 4px;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+.hero .tagline {
+  font-family: var(--font-mono);
+  color: var(--muted);
+  font-size: 14px;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+}
+.hero p.lead {
+  max-width: 760px;
+  margin: 18px auto 26px;
+  color: var(--text);
+  opacity: 0.85;
+  font-size: 16px;
+  line-height: 1.7;
+}
+.hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+  margin: 34px 0;
+}
+.stat-tile {
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+}
+.stat-tile .big {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--violet), var(--cyan));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.stat-tile .lbl {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1.6px;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+
+.step-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
+.step-card { position: relative; padding: 18px 18px 16px; }
+.step-card .step-num {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--accent);
+  opacity: 0.85;
+  text-shadow: 0 0 18px var(--accent-soft);
+}
+.step-card h4 { margin: 6px 0 6px; font-family: var(--font-display); letter-spacing: 1px; }

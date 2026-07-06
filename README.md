@@ -1,252 +1,245 @@
-# 🚪 Reinforcement-Learning Escape Room
+# 🕹️ RL Escape Room
 
-An interactive **escape-room game** where an agent must solve five themed rooms,
-each one a different Reinforcement-Learning problem and **a different algorithm**.
-Every room lets you tune all of the algorithm's hyper-parameters, **train** the
-agent, watch **live learning/exploration graphs**, and **replay** episodes from
-different stages of training to see what the policy learned.
+**Five themed escape rooms · five reinforcement-learning algorithms · one interactive game website.**
 
-| Room | Theme | Algorithm | Model | Main task |
-|------|-------|-----------|-------|-----------|
-| 1 | 🟡 Pacman | **Dynamic Programming** | Known | Collect every coin, then exit |
-| 2 | 💎 Museum Heist | **SARSA** (on-policy) | Unknown | Steal the diamond, dodge cameras/traps, escape |
-| 3 | 🏎️ Street Race | **Q-Learning** (off-policy) | Unknown | Race through oil, mud, boosters & crash barriers |
-| 4 | ⚽ Football | **DQN** (function approx.) | Unknown, continuous | Beat defenders + keeper and score |
-| 5 | 🐔 Cross the Road *(optional)* | **DQN + sensors** | Unknown, continuous | Cross moving traffic as a chicken |
+An agent is locked inside five rooms — a Pacman maze, a museum heist, a street race, a football
+final and a deadly road crossing. Each room is a different RL problem solved by a different
+algorithm, and the whole project runs as a real web app: a **Python (FastAPI) backend** that
+trains the agents and records everything, and a **React + Canvas frontend** that renders each
+room as an animated game, streams live training charts, and replays recorded episodes frame by
+frame.
 
-Difficulty increases across the rooms: a known-model planning problem → cautious
-on-policy control → aggressive off-policy control → continuous control with a
-neural network → a generalising, sensor-based policy tested on unseen rooms.
+| Room | Theme | Algorithm | Environment |
+|------|-------|-----------|-------------|
+| 01 | 🟡 Pacman Maze | Dynamic Programming (Value / Policy Iteration) | 10×10 grid, known model |
+| 02 | 💎 Museum Heist | SARSA (on-policy TD) | 10×10 grid, unknown model |
+| 03 | 🏎️ Street Racing | Q-Learning (off-policy TD) | 10×10 grid, unknown model |
+| 04 | ⚽ Football Striker | DQN (function approximation) | 10×10 m continuous pitch |
+| 05 | 🐔 Cross the Road | DQN + local sensors | 10×10 m continuous road, moving traffic |
 
 ---
 
-## Running it
+## Quick start
+
+**One-click (Windows):** double-click **`start.bat`** (or run `.\start.bat`) — it builds the
+frontend if needed, starts the server and opens **http://localhost:8000**.
+`start.bat dev` opens developer mode instead (backend + hot-reload frontend);
+`start.bat build` forces a frontend rebuild after you edit frontend code.
+
+**Manual:**
+
+```powershell
+# 1. install
+pip install -r requirements.txt
+npm install --prefix frontend
+
+# 2. run the backend (FastAPI, port 8000) — terminal 1, from the project root
+python -m backend.api.main
+
+# 3. run the frontend (Vite dev server, port 5173 — proxies /api to the backend) — terminal 2
+npm run dev --prefix frontend
+```
+
+> **Windows PowerShell notes**
+> * Use `;` instead of `&&` to chain commands (e.g. `cd frontend; npm run dev`).
+> * If you see *"running scripts is disabled on this system"*, either call `npm.cmd`
+>   instead of `npm`, or run once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+> * `python -m backend.api.main` must be run from the **project root**, not from `frontend/`.
+
+Open **http://localhost:5173**, pick a room, press **START TRAINING**.
+
+**Single-server mode:** after `npm run build` inside `frontend/`, the FastAPI server also serves
+the built site — then `python -m backend.api.main` alone runs the whole project on
+**http://localhost:8000**.
+
+**Streamlit fallback:** the original dashboard still works: `streamlit run app.py`.
+
+---
+
+## Architecture
+
+```
+rl/                  ← the RL core (single source of truth, unchanged)
+  envs/              pacman.py · museum.py · racing.py · football.py · obstacles.py
+  algos/             dp.py · sarsa.py · qlearning.py · td_core.py · dqn.py
+
+backend/             ← web layer wrapped AROUND rl/ (no algorithm logic here)
+  envs/, algorithms/ thin re-exports of rl/ under the backend layout
+  training/
+    train.py         room registry (hyperparameter schemas) + per-room trainers
+    evaluate.py      greedy evaluation from saved models + cross-room summary
+    replay_recorder.py  RecordingEnv wrapper + JSON replay files
+    frames.py        per-room replay-frame builders + layout snapshots
+  api/               FastAPI: rooms, training, metrics, replay, config routes
+  utils/             paths · JSON serialization · metric series building
+
+frontend/            ← React 18 + Vite + Recharts + HTML5 Canvas
+  src/components/    RoomCard · TrainingControls · MetricsDashboard · GameCanvas
+                     EpisodeReplay · PolicyView · AlgorithmPanel · ResultsComparison
+  src/render/        canvas game renderers (one visual identity per room)
+  src/rooms/         per-room briefing views
+  src/pages/         Home · Rooms · Room · Algorithms · Results
+
+results/             ← everything training produces, as plain JSON
+  metrics/room{N}.json      per-episode series + summary
+  replays/room{N}/*.json    frame-by-frame episode replays + index.json
+  models/                   pickled Q-tables / DP policies · DQN checkpoints (.pt)
+  policies/room{N}.json     value heatmap + greedy-arrow export (rooms 1–3)
+  configs/room{N}.json      saved hyperparameter overrides
+
+ui/, ui_canvas/, app.py     ← original Streamlit dashboard (fallback, unchanged)
+```
+
+**Key design point:** the algorithms in `rl/algos` were **not modified**. The backend records
+replays by wrapping each environment in a `RecordingEnv` (same `reset()/step()` interface),
+and builds metrics from the `TrainResult` object the algorithms already produce. Training runs
+in a background thread; the frontend polls `/api/train/{id}/status` for live charts.
+
+### How the frontend and backend communicate
+
+```
+GET  /api/rooms                room cards: status, best reward, success rate
+GET  /api/rooms/{id}           detail: hyperparameter schema, layout, action names
+POST /api/train/{id}           start background training  {params: {...}}
+GET  /api/train/{id}/status    live progress + downsampled metric series (polled)
+POST /api/train/{id}/stop      request stop
+POST /api/evaluate/{id}        run + record 10 greedy episodes from the saved model
+GET  /api/metrics/{id}         full saved metric series + summary
+GET  /api/policy/{id}          value heatmap / policy arrows (rooms 1–3)
+GET  /api/replay/{id}          replay catalogue
+GET  /api/replay/{id}/{ep}     one replay: {meta: {..., layout}, frames: [...]}
+GET/POST /api/config/{id}      persist hyperparameter overrides
+GET  /api/results/summary      cross-room comparison
+```
+
+### Replay JSON format
+
+Each replay stores its own layout snapshot (so it renders correctly even after settings
+change) plus compact frames:
+
+```jsonc
+{
+  "meta": { "kind": "eval", "label": "Greedy run 3", "reward": 102.0,
+            "steps": 38, "success": true, "layout": { "type": "pacman", ... } },
+  "frames": [
+    { "t": 12, "a": 3, "r": 9.0, "cum": -3.0, "done": false, "ev": ["coin"],
+      "p": [4, 7], "coins": [[2, 2]], "guard": [8, 8], "open": false }
+  ]
+}
+```
+
+Room-specific frame fields: Pacman `p/coins/guard/open` · Museum `p/d/guards/alarm` ·
+Racing `p/b/open` · Football `p/defs/keeper/shoot` (+ `fl/ball/z` flight frames so kicks
+animate) · Cross the Road `p/cars` (car colors/sizes live in the layout).
+During training only **milestone episodes** are recorded (1, 2, spread, last) plus every
+greedy evaluation episode — enough to *see* learning without gigabytes of JSON.
+
+---
+
+## The rooms
+
+### Room 1 — Pacman Maze · Dynamic Programming
+* **State** `(cell, coin-bitmask [, guard position/phase])` — the same cell needs different
+  actions depending on which coins remain, so the bitmask is part of the state.
+* **Actions** Up / Down / Left / Right (4).
+* **Rewards** step −1 · coin +10 · exit +100 · locked-door bump −10 · slip −5 · wall −5 · guard −50.
+* **Terminal** standing on the door with all coins collected (or caught by the guard).
+* **Dynamics** ice tiles deflect the move sideways with probability `slip_prob` — the stochastic
+  transitions are part of the *known* model handed to Value/Policy Iteration.
+* **What to look at** the Bellman residual Δ dropping (log chart), and the Policy tab: the value
+  landscape flips completely between "coins left" and "all collected".
+
+### Room 2 — Museum Heist · SARSA
+* **State** `(cell, has_diamond, guard patrol phase, alarm timer)`.
+* **Actions** 4-connected moves.
+* **Rewards** step −1 · diamond +30 · escape +100 · camera −50 (+ alarm: guards double speed for
+  5 turns) · trap −15 · caught −50 (terminal) · slip −5.
+* **Why SARSA** on-policy learning prices the exploration risk into Q, so the thief keeps a
+  safety margin around cameras — visible in the replays.
+
+### Room 3 — Street Racing · Q-Learning
+* **State** `(cell, booster-bitmask)` — the finish stays locked until `min_boosters` are collected.
+* **Rewards** step −1 · booster +20 · finish +200 · crash −200 (terminal) · mud −5 ·
+  locked-finish bump −10 · off-track penalties.
+* **Why Q-Learning** the off-policy max-target learns the optimal racing line even while the
+  behaviour policy is still exploring — watch it shave past oil slicks that SARSA would avoid.
+
+### Room 4 — Football Striker · DQN
+* **State** continuous: `x, y, Vx, Vy`, keeper position + patrol direction, per-defender
+  relative vectors (10 + 3·defenders features).
+* **Actions** 15: 8 move directions + stay + 6 kicks (soft/hard × straight/curve-left/curve-right).
+  Free-kick mode: 18 one-shot kicks (3 aims × 2 powers × 3 curves) with 3D ball physics over a wall.
+* **Rewards** goal +300 · save −10 · miss −30 · tackled −50 · out-of-bounds −30 · progress
+  shaping toward the goal · step −0.3 · shot-clock timeout −25.
+* **Why DQN** no table can cover a continuous state; an MLP (128×128) approximates Q(s,a) with
+  experience replay + a target network.
+
+### Room 5 — Cross the Road · DQN + sensors
+* **State** `x, y, Vx, Vy`, direction to goal, and **6 sensor slots** × (relative position,
+  velocity, closeness) for the nearest cars in range — the agent never sees the whole map.
+* **Actions** Up / Down / Left / Right / Stay.
+* **Rewards** crossed +250 · collision −140 (terminal) · off-road −40 (terminal) · near-miss
+  penalty · progress shaping.
+* **Generalisation** traffic can be re-randomised every episode, so the policy must react to
+  sensors instead of memorising a pattern.
+
+---
+
+## Hyperparameters (Training Dashboard)
+
+Every control in the UI comes from the backend schema in `backend/training/train.py`:
+
+* **DP (Room 1):** method (value/policy iteration), γ, convergence threshold θ, max iterations,
+  evaluation episodes, map source/seed, slip probability, guard on/off + behaviour.
+* **SARSA / Q-Learning (Rooms 2–3):** α, γ, ε start / min / decay, episodes, max steps,
+  slip probability, map source/seed (+ alarm toggle in Room 2, booster quota in Room 3).
+* **DQN (Rooms 4–5):** learning rate, γ, ε start / min, exploration fraction, batch size,
+  replay buffer size, target-network update frequency, episodes, max steps
+  (+ mode/defenders/keeper speed in Room 4; cars/speeds/sensor range/randomise in Room 5).
+
+Press **SAVE CONFIG** to persist a setup as the room default (`results/configs/`).
+
+## Reading the graphs
+
+* **Reward per episode + moving average** — the main learning curve; the average should climb.
+* **Steps per episode** — falling steps = shorter, more direct solutions (grid rooms).
+* **Success / failure rate (rolling 50)** — fraction of recent episodes that reached the goal.
+* **ε over time** — the exploration schedule; learning usually accelerates as ε decays.
+* **Mean |TD error|** (rooms 2–3) — shrinking TD error = the value estimates are converging.
+* **DQN loss** (rooms 4–5) — should stay bounded; explosions mean lr / target-update trouble.
+* **Bellman residual Δ** (room 1, log scale) — DP's convergence certificate.
+* **Hazard events** — cameras / catches / traps / crashes per episode, falling as the agent learns.
+* Rewards are **not comparable across rooms** (different scales) — compare success rates.
+
+## Replays
+
+Every training run records milestone episodes (1, 2, spread, final) and every evaluation
+records all 10 greedy episodes. The Replay tab plays them with **play / pause / reset /
+step ±1 / 0.25×–8× speed / scrubbing**, an interpolated animated canvas, and a state monitor
+showing the current state, action name, step reward, cumulative reward, per-step events and
+the terminal outcome. Football kicks are expanded into ball-flight frames; Cross-the-Road
+replays draw the live sensor ring.
+
+## Training each room
+
+From the UI: room page → TRAIN → START TRAINING. From the CLI:
 
 ```bash
-pip install -r requirements.txt
-streamlit run app.py
+python -m backend.training.train --room 3 --set episodes=1500 alpha=0.15
 ```
 
-A browser tab opens with a sidebar room selector. Pick a room → set parameters →
-**Train/Solve** → inspect the graphs → use the **replay** controls at the bottom.
+## What changed vs. the original project (frontend upgrade)
 
-> Rooms 1–3 train in seconds. Rooms 4–5 (DQN) train in roughly **1–2 minutes** on
-> a CPU; a live progress bar and reward curve are shown while training.
-
----
-
-## Project structure
-
-```
-app.py                  Streamlit entry point + room routing
-rl/
-  envs/
-    grid_base.py        Shared 10x10 geometry + slippery-cell transition model
-    pacman.py           Room 1 environment (+ explicit MDP for DP)
-    museum.py           Room 2 environment (museum heist)
-    racing.py           Room 3 environment (dungeon escape)
-    football.py         Room 4 continuous environment
-    obstacles.py        Room 5 continuous environment (moving traffic + sensors)
-  algos/
-    dp.py               Value iteration & policy iteration
-    td_core.py          Shared tabular TD control
-    sarsa.py            SARSA  (on-policy)  wrapper
-    qlearning.py        Q-Learning (off-policy) wrapper
-    dqn.py              Deep Q-Network (replay buffer + target network, PyTorch)
-  utils.py              Seeding, smoothing, TrainResult (metrics + replay snapshots)
-ui/
-  render.py             Grid / pitch rendering + metrics dataframe
-  common.py             Live-training progress, learning graphs, replay player
-  room1..room5_*.py     One Streamlit page per room
-```
-
-The three grid rooms share one **slippery-cell model** (`grid_base.py`): on an icy
-(or oily) cell the move is, with probability *slip*, deflected **sideways** —
-half the slip mass to each perpendicular direction. So *slip = 0.2* gives
-**80 % intended / 10 % left / 10 % right** (Room 1 ice) and *slip = 0.3* gives
-**70 / 15 / 15** (Room 3 oil). Dynamic Programming reads the *full* distribution
-(`cell_transitions`); SARSA/Q-Learning only *sample* it (`sample_cell`). A blocked
-move also reports a wall-hit so the rooms can penalise it.
-
----
-
-## Room 1 — Pacman · Dynamic Programming
-
-**Idea.** The maze model is fully known, so we compute the optimal policy exactly
-with value/policy iteration — no exploration needed.
-
-* **State:** `(cell, coin_mask, guard_t)` — position, a bitmask of the coins still
-  on the board, and the **guard's patrol step**. (Without the guard it's just
-  `(cell, coin_mask)`.) The **final state** is standing on the door with all coins
-  collected; landing on the guard goes to a single absorbing *caught* state.
-* **Actions:** Up / Down / Left / Right (blocked moves keep you in place).
-* **Dynamics:** several **icy cells** deflect the move sideways (80/10/10 at
-  *slip = 0.2*); the **door is locked** until all coins are collected. A **guard**
-  walks a **fixed, fully-known back-and-forth patrol** — so it stays compatible with
-  Dynamic Programming (`guard_t` indexes the patrol; its position is a deterministic
-  function of the step). Catching the agent ends the episode.
-* **Rewards:** `+10` per coin · `+100` exit · `−1` per step · `−10` trying the
-  locked door · `−50` caught by the guard · `−5` slip · `−5` hitting a wall.
-
-**Best parameters.** `γ = 0.95`, `θ = 1e-4`, `slip = 0.2`, 3 coins + patrol guard
-→ ≈ **2,100 states**, value iteration converges in ~170 sweeps and the optimal
-greedy policy collects the coins, dodges the patrol and escapes (≈ 36 steps).
-Fewer coins / shorter patrol → fewer states; the app caps interactive DP at 80 000
-states.
-
-**Graphs.** Bellman residual per sweep (convergence), start-state value per sweep,
-policy-changes per sweep, a **final value heatmap + greedy-policy arrows**, and a
-**replay** of the greedy rollout after each DP sweep — you watch the plan improve.
-
----
-
-## Room 2 — Museum Heist · SARSA
-
-**Idea.** A robber breaks into a museum to steal the **diamond** from the vault
-and escape. The museum has gallery rooms connected by corridors, security
-**cameras**, **laser traps**, **patrol guards**, and **slippery marble floors**.
-The model is **unknown** — SARSA learns from experience.
-
-The default layout is a museum floor plan with a vault at the top, exhibition
-galleries in the middle, and a heavy camera surveillance zone near the exit.
-Different generated museums create different heist challenges.
-
-* **State:** `(cell, has_diamond)`, plus `guard_phase` when patrol guards are
-  enabled. **Final state:** reaching the exit *with* the diamond.
-* **Actions:** Up / Down / Left / Right.
-* **Dynamics:** cameras cost a heavy penalty per step in their zone, traps hurt,
-  guards end the heist if they catch you, marble floors deflect movement.
-* **Rewards:** `+30` diamond · `+100` escape · `−1` step · `−50` camera zone ·
-  `−15` trap · `−50` caught by guard (terminal) · `−5` slip · `−2` wall.
-
-**Best parameters.** `episodes = 1500`, `α = 0.2`, `γ = 0.97`, `ε: 1.0 → 0.02`
-(decay 0.997 / episode), `slip = 0.1` → **100 % success**. The greedy policy
-finds a clean path through the museum, avoids cameras, and escapes with the
-diamond.
-
----
-
-## Room 3 — Street Race · Q-Learning
-
-**Idea.** A car races through a **street circuit** from start to finish,
-navigating oil spills, mud patches, crash barriers, and collecting boosters.
-The winding streets create multiple routes with different risk/reward tradeoffs.
-
-This is harder than Room 2: the track has more hazards, boosters add bitmask
-states (increasing the state space), and oil dynamics create stochastic risk
-(slipping into a crash barrier ends the race).
-
-* **State:** `(cell, booster_mask)` — position plus a bitmask of boosters
-  already collected. **Final state:** crossing the finish line.
-* **Actions:** Up / Down / Left / Right.
-* **Dynamics:** oil spills deflect movement sideways (slip), mud costs penalty,
-  crash barriers are terminal, boosters are one-time pickups.
-* **Rewards:** `+200` finish · `+15` booster (once) · `−1` step · `−5` mud ·
-  `−200` crash (terminal) · `−30` off-track · `−5` wall hit.
-
-**Best parameters.** `episodes = 2000`, `α = 0.2`, `γ = 0.97`, `ε: 1.0 → 0.05`
-(decay 0.997), `oil slip = 0.2` → Q-Learning aggressively learns the fastest
-racing line, collecting boosters on the way.
-
-**Bonus — SARSA comparison.** Tick *"Also train SARSA"* to see the on-policy
-contrast. Overlaid reward/steps curves and a **🏁 race** of both greedy
-policies on the same track.
-
----
-
-## Room 4 — Football Final Shot · DQN
-
-**Idea.** A continuous 10×10 m pitch. A **Q-table is impractical** for real-valued
-state, so a small MLP approximates `Q(s, a)`.
-
-* **Core state:** `(x, y, vₓ, v_y)`; `dt = 0.02 s`, velocity components discrete in
-  `{−1, 0, 1} m/s`. The agent commits to a velocity for `action_repeat` ticks
-  (frame-skip = 10), so one decision moves it ~0.2 m.
-* **Observation (network input):** the core state **plus** the keeper's position +
-  **patrol direction** and each defender's position **relative** to the player
-  (10 base features + 3 per defender).
-* **The kick is real.** On a shoot action the **ball leaves the player** and flies
-  on its own (simulated at the 0.02 s tick): you choose the **power** (soft/hard →
-  ball speed) and the **curve** (bend left / straight / right → a Magnus-style
-  sideways acceleration). The replay animates the ball flight.
-* **Actions (15):** 9 moves — Up · Down · Left · Right · Stay · the 4 **diagonals**
-  (unit-normalised so diagonals aren't faster) — plus 6 kicks = {soft, hard} ×
-  {curve-left, straight, curve-right}. A kick **inside** the area ends the episode
-  (goal / save / miss); a kick from **outside** is a wasted touch (small penalty,
-  play continues). Defenders and the keeper already move in continuous directions.
-* **Defenders** (configurable count, **random start positions every game**) chase the
-  player; the **keeper patrols side to side** across the goal mouth. Score by timing
-  the shot for when the keeper has drifted off your line, or by bending the ball
-  around him.
-* **Rewards:** `+300` goal · `−10` saved (on target but stopped) · `−30` missed the
-  goal (wide) · `+10` entering the area · `−1` per step **dwelling** in the area (so
-  the agent shoots promptly) · `−25` shot-clock timeout · `+20` dodging a defender ·
-  `−50` tackled · `−30` out of bounds · `−5` wasted shot · `−0.3` step, **plus
-  distance-to-goal shaping** (`3 ×` metres gained). The save < miss gap deliberately
-  rewards getting shots *on target* first, then learning to beat the keeper.
-* **Final state:** the ball in the net.
-
-**Best parameters.** `episodes ≈ 600–800`, hidden `(128, 128)`, `lr = 1e-3`,
-`γ = 0.99`, batch `64`, `ε → 0.05` over 50 % of episodes, target-net update every
-`500` steps, `learn_start = 1500`. Typical learned **greedy** result with 2–3
-defenders: **~40 % goals**, the rest split between keeper saves and being tackled
-while dribbling in — a genuinely hard control task. **Difficulty knobs:** number of
-**defenders** (≥1; they create the urgency that makes the agent commit to a shot),
-**defender speed**, and **keeper patrol speed**. The agent learns to dribble into
-the area, line up inside the mouth, wait for the keeper to drift off its line, and
-finish (sometimes bending the ball with curve).
-
-> Design notes: the right edge is the goal line (clamped, not "out"), so the only
-> positive ending is a real shot; outside-area shots are non-terminal so random
-> exploration isn't forced to end episodes early. These two choices were essential
-> to make the sparse goal reward discoverable.
-
----
-
-## Room 5 *(optional)* — Cross the Road · DQN + sensors
-
-**Idea.** A chicken starts on the left sidewalk and must reach the far edge of a
-10×10 m road. Cars stream vertically through alternating lanes, wrap in from
-off-map, and keep moving while the chicken chooses up / down / left / right /
-wait. A **new traffic pattern every episode** means the agent cannot memorise one
-layout — it must learn a **reactive** crossing policy from local **sensors**.
-
-* **State:** `(x, y, vₓ, v_y)` (continuous, same physics style as Room 4, 5 move
-  actions).
-* **Observation:** own dynamics + direction to the far sidewalk + the nearest cars
-  inside **`sensor_range` metres**, each as relative position, vertical velocity,
-  and closeness. Empty slots read as "clear".
-  `obs_dim = 6 + 4 × (cars sensed)`.
-* **Rewards:** `+250` crossing the road · `−140` being hit by traffic · `−40` out
-  of bounds · a small near-traffic penalty · `−0.08` per step, plus rightward
-  progress shaping. **Final state:** reaching the right edge.
-
-**Best parameters.** `episodes ≈ 800`, hidden `(128, 128)`, `lr = 1e-3`, `γ = 0.99`,
-`sensor_range = 3.5 m`, `14 cars`, frame-skip 10. **Shrink the sensor range** to
-make the chicken short-sighted; **add cars** or increase traffic speed to make the
-road more crowded. After training, hit **"Generate & test"** to spawn unseen
-traffic and replay the learned policy in it.
-
-**What it tests.** Generalisation via local observation + function approximation —
-the agent solves traffic patterns it has never seen.
-
----
-
-## Graphs & replay (every room)
-
-* **Learning graphs:** episode reward (raw + smoothed), steps-to-finish, rolling
-  success rate, ε-decay (exploration), plus algorithm-specific series
-  (DP convergence residual; mean |TD-error|; DQN training loss).
-* **Replay:** snapshots are recorded at several training stages (DP: 1/5/converged
-  sweeps; TD/DQN: *Early / Mid / Final* greedy rollouts). Scrub with the step slider
-  or hit **▶ Animate** to watch the agent move, with per-step and cumulative reward.
-
-## Notes on the algorithms
-
-* **DP** uses the known model directly — optimal, but only feasible because the
-  state space is small and enumerable.
-* **SARSA vs Q-Learning** differ in a single line (the TD target) — implemented once
-  in `td_core.py`. SARSA is the cautious one (Room 2's cliff), Q-Learning the
-  aggressive one (Room 3's short-cut).
-* **DQN** adds experience replay + a target network for stable function
-  approximation, with ε-greedy exploration decayed per episode.
+* The Streamlit dashboard is replaced (but kept as a fallback) by a **React + Vite website**
+  with a dark arcade design system, per-room accent themes, HUD navigation and page transitions.
+* Every room is rendered as a **living HTML5 Canvas game**: neon Pacman maze with animated
+  mouth and ghost guard; museum with camera sweeps, laser traps and alarm mode; street circuit
+  with lit city blocks, oil sheen and checkered finish; football pitch with physical ball
+  flights; multi-lane traffic with a live sensor radar.
+* **Live training dashboard** — background training jobs stream downsampled metric series to
+  Recharts graphs while the run is still going, with progress bar and stop control.
+* **Episode replay system** — JSON replays with full transport controls and a state monitor.
+* **Policy visualisation** — value heatmap + greedy arrows per room flag (rooms 1–3).
+* **Results page** — cross-room comparison table and charts.
+* **The RL logic did not change** — same environments, states, rewards, algorithms and
+  training behaviour as the original `rl/` package.
