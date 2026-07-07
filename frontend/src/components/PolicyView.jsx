@@ -73,8 +73,8 @@ export default function PolicyView({ room }) {
                 <div key={`${r}-${c}`} className="policy-cell"
                   title={v !== null ? `(${r},${c}) V=${v}` : `(${r},${c})`}
                   style={{
-                    background: isWall ? '#1d2648' : valueColor(v, vmin, vmax),
-                    border: isWall ? '1px solid #2c3768' : '1px solid transparent',
+                    background: isWall ? 'var(--policy-wall)' : valueColor(v, vmin, vmax),
+                    border: isWall ? '1px solid var(--line-bright)' : '1px solid transparent',
                   }}>
                   {!isWall && a !== null && ARROWS[a]}
                   {!isWall && showValues && v !== null && (

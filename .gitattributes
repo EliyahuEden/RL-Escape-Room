@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# launchers must keep their native line endings on every checkout
+start.sh text eol=lf
+start.bat text eol=crlf

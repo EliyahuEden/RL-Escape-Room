@@ -40,7 +40,12 @@ def _load_act_fn(room_id: int, params: dict):
         with open(path, "rb") as f:
             data = pickle.load(f)
         Q = {s: np.asarray(q) for s, q in data["Q"].items()}
-        return lambda s: int(np.argmax(Q[s])) if s in Q else 0
+        act = lambda s: int(np.argmax(Q[s])) if s in Q else 0
+        if room_id == 3 and data.get("rival_Q"):
+            RQ = {s: np.asarray(q) for s, q in data["rival_Q"].items()}
+            rival_act = lambda s: int(np.argmax(RQ[s])) if s in RQ else 0
+            return act, rival_act
+        return act
 
     # rooms 4 & 5 — DQN checkpoint
     import torch
@@ -85,8 +90,14 @@ def evaluate_room(room_id: int, n_episodes: int = 10) -> dict:
     recorder = ReplayRecorder(room_id, clear=False)
     freekick = room_id == 4 and params.get("mode") == "freekick"
     max_steps = 6 if freekick else params["max_steps"]
-    summary = tr.run_greedy_eval(room_id, env, act, recorder, max_steps,
-                                 n=n_episodes)
+    if isinstance(act, tuple):  # room 3 with a trained SARSA rival: race!
+        agent_act, rival_act = act
+        summary = tr.run_race_eval(env, tr.make_env(room_id, params),
+                                   agent_act, rival_act, recorder,
+                                   max_steps, n=n_episodes)
+    else:
+        summary = tr.run_greedy_eval(room_id, env, act, recorder, max_steps,
+                                     n=n_episodes)
 
     # refresh the eval block inside the saved metrics + model info
     metrics = load_json(metrics_path(room_id), default=None)

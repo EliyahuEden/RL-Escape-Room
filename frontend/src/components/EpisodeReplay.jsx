@@ -185,9 +185,13 @@ export default function EpisodeReplay({ room }) {
               <div className="row"><span className="k">ALARM</span>
                 <span className="v" style={{ color: 'var(--red)' }}>⚠ ACTIVE</span></div>
             )}
-            {'b' in frame && (
-              <div className="row"><span className="k">BOOSTERS LEFT</span>
-                <span className="v">{frame.b.length} {frame.open ? '· FINISH OPEN' : '· finish locked'}</span></div>
+            {'ncp' in frame && (
+              <div className="row"><span className="k">CHECKPOINTS</span>
+                <span className="v">{frame.ncp} ✓ {frame.open ? '· FINISH OPEN' : '· finish locked'}</span></div>
+            )}
+            {'rv' in frame && (
+              <div className="row"><span className="k">RIVAL (SARSA)</span>
+                <span className="v">({frame.rv[0]}, {frame.rv[1]})</span></div>
             )}
             {'shoot' in frame && (
               <div className="row"><span className="k">SHOOTING ZONE</span>

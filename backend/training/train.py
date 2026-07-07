@@ -14,6 +14,7 @@ CLI (every algorithm can be tested independently)::
 from __future__ import annotations
 
 import pickle
+import random
 import time
 from typing import Callable, Optional
 
@@ -51,15 +52,17 @@ def _p(key, label, type_, default, minv=None, maxv=None, step=None,
             "help": help_}
 
 
-def _td_params(episodes=800, max_steps=200):
+def _td_params(episodes=800, max_steps=200, eps_end=0.05, eps_end_help="",
+               alpha=0.1):
     return [
-        _p("alpha", "Learning rate α", "float", 0.1, 0.01, 1.0, 0.01,
+        _p("alpha", "Learning rate α", "float", alpha, 0.01, 1.0, 0.01,
            help_="How strongly each TD error updates Q(s,a)."),
         _p("gamma", "Discount γ", "float", 0.95, 0.5, 0.999, 0.005,
            help_="How much future reward matters."),
         _p("eps_start", "Initial ε", "float", 1.0, 0.0, 1.0, 0.05,
            help_="Starting exploration rate."),
-        _p("eps_end", "Minimum ε", "float", 0.05, 0.0, 0.5, 0.01),
+        _p("eps_end", "Minimum ε", "float", eps_end, 0.0, 0.5, 0.01,
+           help_=eps_end_help),
         _p("eps_decay", "ε decay / episode", "float", 0.995, 0.9, 1.0, 0.001),
         _p("episodes", "Episodes", "int", episodes, 100, 5000, 50),
         _p("max_steps", "Max steps / episode", "int", max_steps, 50, 500, 25),
@@ -144,16 +147,18 @@ ROOMS: dict[int, dict] = {
         "description": (
             "Sneak through the museum, steal the diamond from the vault, and "
             "escape — past camera zones, laser traps, patrolling guards and "
-            "slippery marble. Stepping into a camera zone triggers an alarm "
-            "that doubles guard speed for 5 turns. The model is unknown: "
-            "SARSA learns cautiously from its own ε-greedy experience."),
-        "state": "(cell, has_diamond, guard phase, alarm timer)",
+            "slippery marble. One camera sighting raises the ALARM: every "
+            "guard abandons its patrol and hunts you for the rest of the "
+            "heist. The model is unknown: SARSA learns cautiously from its "
+            "own ε-greedy experience."),
+        "state": "(cell, has_diamond, guard phase — or guard positions once the alarm is up)",
         "actions": "4 — Up / Down / Left / Right",
-        "rewards": "step −1 · diamond +30 · escape +100 · camera −50 · trap −15 · guard −50 · slip −5",
-        "params": _td_params() + [
+        "rewards": "step −1 · diamond +30 · escape +100 · camera −50 + manhunt · trap −15 · guard −50 · slip −5",
+        "params": _td_params(episodes=2000) + [
             _p("slip_prob", "Slip probability", "float", 0.1, 0.0, 0.5, 0.05),
             _p("alarm_enabled", "Camera alarm system", "bool", True,
-               help_="Cameras trigger a 5-turn alarm that doubles guard speed."),
+               help_="One camera sighting makes the guards chase you for the "
+                     "rest of the episode."),
             *_MAP, _SEED,
         ],
     },
@@ -167,17 +172,22 @@ ROOMS: dict[int, dict] = {
         "accent": "#ff4d5a",
         "icon": "car",
         "description": (
-            "A street circuit through city blocks. The finish line stays "
-            "locked until enough boosters are collected. Oil slicks deflect "
-            "the car (into walls = crash, race over), mud slows it down. "
-            "Q-Learning learns off-policy — it hunts the optimal racing line "
-            "even while the behaviour policy is still exploring."),
-        "state": "(cell, booster-bitmask)",
+            "A Grand Prix against a rival: your Q-Learning car versus a "
+            "SARSA car trained on the same circuit with the same settings. "
+            "Both must cross checkpoint 1, then checkpoint 2, then the "
+            "finish — and every gate exists twice: once on the express "
+            "lane that hugs the crash barriers, once on the safe ring "
+            "road. SARSA (on-policy) prices the barrier risk in and takes "
+            "the long way; Q-Learning (off-policy) learns the barrier-"
+            "hugging lap and wins. Cliff walking, staged as a race."),
+        "state": "(cell, next-checkpoint) — each car tracks its own lap progress",
         "actions": "4 — Up / Down / Left / Right",
-        "rewards": "step −1 · booster +20 · finish +200 · crash −200 · mud −5 · locked finish −10",
-        "params": _td_params() + [
+        "rewards": "step −1 · checkpoint +40 · finish +200 · crash −200 · gravel −5 · locked finish −10 · fastest car wins the race",
+        "params": _td_params(episodes=1200, eps_end=0.15, alpha=0.2,
+                             eps_end_help="Kept high on purpose: lingering "
+                             "exploration is what makes the barrier lane "
+                             "dangerous for the on-policy SARSA rival.") + [
             _p("slip_prob", "Oil slip probability", "float", 0.2, 0.0, 0.5, 0.05),
-            _p("min_boosters", "Boosters to unlock finish", "int", 3, 1, 4, 1),
             *_MAP, _SEED,
         ],
     },
@@ -302,8 +312,7 @@ def make_env(room_id: int, params: dict):
         layout = (generate_racing_layout(seed=params["map_seed"])
                   if params["map_mode"] == "generated" else RACING_DEFAULT)
         return RacingEnv(layout=layout, slip_prob=params["slip_prob"],
-                         max_steps=params["max_steps"],
-                         min_boosters=params["min_boosters"], seed=seed)
+                         max_steps=params["max_steps"], seed=seed)
     if room_id == 4:
         if params.get("mode") == "freekick":
             return FreeKickEnv(n_wall=params["n_defenders"],
@@ -371,6 +380,99 @@ def run_greedy_eval(room_id: int, env, act_fn: Callable, recorder: ReplayRecorde
                          "fail_reason": None if success else (fail or "timeout"),
                          "layout": layout_fn(env)})
     return {"episodes": n, "success_rate": round(wins / n, 3),
+            "avg_reward": round(float(np.mean(rewards)), 2),
+            "avg_steps": round(float(np.mean(steps_list)), 1)}
+
+
+# ===========================================================================
+#  Room 3 race evaluation — Q-Learning car vs the SARSA rival, side by side
+# ===========================================================================
+def run_race_eval(env, rival_env, act_agent, act_rival, recorder,
+                  max_steps: int, n: int = 10) -> dict:
+    """Race the two greedy policies on the same track.
+
+    Both cars step simultaneously in independent copies of the environment
+    (each collects its own boost pads).  The replay stores the rival's
+    position in ``rv`` on every frame; the last frame gets a
+    ``won race`` / ``lost race`` event for the renderer.
+    """
+    frame_fn = FRAME_FNS[3]
+    layout_fn = LAYOUT_FNS[3]
+    wins, finishes, rewards, steps_list = 0, 0, [], []
+    for ep in range(1, n + 1):
+        # different slip draws per race, reproducible across runs
+        env.rng = random.Random(ep)
+        rival_env.rng = random.Random(1000 + ep)
+        s_a = env.reset()
+        s_r = rival_env.reset()
+        recorder.start(f"eval_{ep:04d}")
+        frame = frame_fn(env, None, 0.0, 0.0, False, {})
+        frame["rv"] = list(rival_env.pos)
+        recorder.add_frame(frame)
+
+        cum, steps, done, info = 0.0, 0, False, {}
+        rival_done, rival_steps, rival_fail = False, None, None
+        while not done and steps < max_steps:
+            a = act_agent(s_a)
+            s_a, r, done, info = env.step(a)
+            cum += r
+            steps += 1
+            rival_events = []
+            if not rival_done:
+                ra = act_rival(s_r)
+                s_r, _, rival_done, rinfo = rival_env.step(ra)
+                if rinfo.get("success"):
+                    rival_steps = steps
+                    rival_events.append("rival finished")
+                elif rinfo.get("crash"):
+                    rival_fail = "crash"
+                    rival_events.append("rival crashed")
+            frame = frame_fn(env, int(a), float(r), round(cum, 2),
+                             bool(done), info)
+            frame["rv"] = list(rival_env.pos)
+            frame["ev"] = frame["ev"] + rival_events
+            recorder.add_frame(frame)
+
+        success = bool(info.get("success"))
+        rival_finished = rival_steps is not None
+        won = success and (not rival_finished or steps <= rival_steps)
+        finishes += success
+        wins += won
+        rewards.append(cum)
+        steps_list.append(steps)
+        if success:
+            frame["ev"] = frame["ev"] + (["won race"] if won else ["lost race"])
+        fail = "crash" if info.get("crash") else None
+
+        # epilogue: let the rival finish its lap on camera while the
+        # outcome banner shows — a race should end with both cars home
+        outcome_ev = list(frame["ev"])
+        epilogue = 0
+        while done and not rival_done and epilogue < 30:
+            ra = act_rival(s_r)
+            s_r, _, rival_done, rinfo = rival_env.step(ra)
+            epilogue += 1
+            ef = frame_fn(env, None, 0.0, round(cum, 2), True, {})
+            ef["ev"] = list(outcome_ev)
+            ef["rv"] = list(rival_env.pos)
+            if rinfo.get("success"):
+                rival_steps = steps + epilogue
+                ef["ev"] = ef["ev"] + ["rival finished"]
+            elif rinfo.get("crash"):
+                ef["ev"] = ef["ev"] + ["rival crashed"]
+            recorder.add_frame(ef)
+        recorder.finish({
+            "kind": "eval", "episode": ep,
+            "label": f"Race {ep} — {'WON' if won else 'LOST'}",
+            "reward": round(cum, 1), "steps": steps, "success": success,
+            "fail_reason": None if success else (fail or "timeout"),
+            "race": "won" if won else "lost",
+            "rival_steps": rival_steps, "rival_fail": rival_fail,
+            "layout": layout_fn(env),
+        })
+    return {"episodes": n,
+            "success_rate": round(finishes / n, 3),
+            "beat_rival": round(wins / n, 3),
             "avg_reward": round(float(np.mean(rewards)), 2),
             "avg_steps": round(float(np.mean(steps_list)), 1)}
 
@@ -530,21 +632,90 @@ def train_td(room_id: int, params: dict, progress=None, stop=None) -> dict:
     wrapped.close()
 
     series = mt.build_series(result)
+
+    # ---- Room 3: train the SARSA rival on the same track ------------------
+    rival_result = None
+    if room_id == 3 and not stopped and result.policy:
+        def rival_cb(ep, total, res):
+            holder["rival"] = res
+            if progress and (ep % report_every == 0 or ep == total):
+                def merged():
+                    s = dict(series)
+                    rs = mt.build_series(res)
+                    s["rival_reward_avg"] = rs.get("reward_avg")
+                    s["rival_success_rate"] = rs.get("success_rate")
+                    return s
+                progress(ep, total, merged,
+                         "training the SARSA rival on the same track")
+            if stop is not None and stop.is_set():
+                raise StopRequested()
+
+        def greedy_finishes(Qtable) -> bool:
+            """Slip-free greedy rollout — a competent rival must finish."""
+            probe = make_env(3, params)
+            probe.grid.slip_prob = 0.0
+            s, done, steps, pinfo = probe.reset(), False, 0, {}
+            while not done and steps < params["max_steps"]:
+                q = Qtable.get(s)
+                s, _, done, pinfo = probe.step(
+                    int(np.argmax(q)) if q is not None else 0)
+                steps += 1
+            return bool(pinfo.get("success"))
+
+        try:
+            # SARSA's greedy trace can occasionally loop between near-tie
+            # cells; retry a couple of seeds so the race gets a real rival
+            for attempt in range(3):
+                rival_result = td_core.train(
+                    make_env(3, params), algo="sarsa",
+                    episodes=params["episodes"], alpha=params["alpha"],
+                    gamma=params["gamma"], eps_start=params["eps_start"],
+                    eps_end=params["eps_end"], eps_decay=params["eps_decay"],
+                    max_steps=params["max_steps"],
+                    seed=params["seed"] + 1 + attempt,
+                    progress_cb=rival_cb, record_replays=False,
+                    snapshot_fracs=())
+                if rival_result.policy and greedy_finishes(rival_result.policy):
+                    break
+        except StopRequested:
+            stopped = True
+            rival_result = None
+
     summary = mt.build_summary(result, algo, time.time() - t0)
     eval_summary = None
 
     if not stopped and result.policy:
         Q = result.policy  # dict: state -> np.array of action values
-        nA = env.n_actions
 
         def act(state):
             q = Q.get(state)
             return int(np.argmax(q)) if q is not None else 0
 
-        eval_summary = run_greedy_eval(room_id, env, act, recorder,
-                                       params["max_steps"], n=10)
+        model_dump = {"Q": {s: q.tolist() for s, q in Q.items()}}
+
+        if rival_result is not None and rival_result.policy:
+            rival_Q = rival_result.policy
+            rs = mt.build_series(rival_result)
+            series["rival_reward_avg"] = rs.get("reward_avg")
+            series["rival_success_rate"] = rs.get("success_rate")
+            summary["rival_algorithm"] = "SARSA"
+            summary["rival_success_rate_last50"] = round(
+                rival_result.success_rate(50), 3)
+            model_dump["rival_Q"] = {s: q.tolist() for s, q in rival_Q.items()}
+
+            def rival_act(state):
+                q = rival_Q.get(state)
+                return int(np.argmax(q)) if q is not None else 0
+
+            eval_summary = run_race_eval(env, make_env(3, params),
+                                         act, rival_act, recorder,
+                                         params["max_steps"], n=10)
+        else:
+            eval_summary = run_greedy_eval(room_id, env, act, recorder,
+                                           params["max_steps"], n=10)
+
         with open(model_path(room_id), "wb") as f:
-            pickle.dump({"Q": {s: q.tolist() for s, q in Q.items()}}, f)
+            pickle.dump(model_dump, f)
         save_json(info_path(room_id), {"room": room_id, "algorithm": algo,
                                        "params": params, "eval": eval_summary})
         _export_td_policy(room_id, env, Q)
@@ -555,13 +726,14 @@ def train_td(room_id: int, params: dict, progress=None, stop=None) -> dict:
 
 
 def _export_td_policy(room_id: int, env, Q: dict) -> None:
-    """Best value/action per cell for two flag settings of the room."""
+    """Best value/action per cell for the room's flag settings."""
     if room_id == 2:
         flag_of = lambda s: int(s[1])
         labels = ["Before the diamond", "Diamond in hand"]
     else:
-        flag_of = lambda s: int(env.finish_unlocked(s[1]))
-        labels = ["Finish locked", "Finish unlocked"]
+        flag_of = lambda s: min(int(s[1]), env.n_gates)
+        labels = ([f"To checkpoint {i + 1}" for i in range(env.n_gates)]
+                  + ["All checkpoints — finish open"])
     best: dict = {}
     for s, q in Q.items():
         cell, fi = s[0], flag_of(s)

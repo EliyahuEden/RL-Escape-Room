@@ -10,6 +10,8 @@ runs the whole project.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -19,13 +21,25 @@ from backend.api.routes_metrics import router as metrics_router
 from backend.api.routes_replay import router as replay_router
 from backend.api.routes_rooms import router as rooms_router
 from backend.api.routes_training import router as training_router
-from backend.utils.config import FRONTEND_DIST, ensure_dirs
+from backend.utils.config import FRONTEND_DIST, reset_results
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # safety net: clear leftovers if the previous run crashed / was killed
+    # before its shutdown hook could run
+    reset_results()
+    yield
+    # session over: training data only lives while the server is running
+    reset_results()
+
 
 app = FastAPI(
     title="RL Escape Room",
     description="Five themed escape rooms, five RL algorithms — Dynamic "
                 "Programming, SARSA, Q-Learning and DQN behind an arcade web UI.",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # the dev frontend (vite, port 5173) talks to this server on port 8000
@@ -36,11 +50,6 @@ app.include_router(rooms_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
 app.include_router(metrics_router, prefix="/api")
 app.include_router(replay_router, prefix="/api")
-
-
-@app.on_event("startup")
-def _startup():
-    ensure_dirs()
 
 
 @app.get("/api/health")
@@ -66,6 +75,17 @@ if (FRONTEND_DIST / "index.html").exists():
         if full_path and target.is_file():
             return FileResponse(target)
         return FileResponse(FRONTEND_DIST / "index.html")
+else:
+    @app.get("/", include_in_schema=False)
+    def no_frontend():
+        return {
+            "message": "API is running, but the web app is not built yet. "
+                       "Either run `npm run build` inside frontend/ and "
+                       "restart this server, or start the dev frontend "
+                       "(`npm run dev` inside frontend/) and open "
+                       "http://localhost:5173",
+            "api_docs": "http://127.0.0.1:8000/docs",
+        }
 
 
 if __name__ == "__main__":

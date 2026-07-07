@@ -1,24 +1,34 @@
-"""Room 3 - Street Race (Q-Learning, unknown model).
+"""Room 3 - Grand Prix street circuit (Q-Learning vs. a SARSA rival).
 
-A car races through a city street circuit.  The finish line is **locked** until
-the car collects enough **boosters** scattered around the track — just like
-Room 1's Pacman must collect all coins before the door opens.
+A lap with **checkpoint gates**: the car must cross checkpoint 1, then
+checkpoint 2, and only then does the finish line open.  Every gate exists
+in TWO places — one cell on the **express lane** and one on the **ring
+road** — so there are two complete ways to drive the lap:
 
-The streets wind through city blocks and are littered with hazards:
+* the **express lane** (bottom row) runs straight from start to finish,
+  hugging a wall of **crash barriers** — one sideways move into them ends
+  the race.  Driven greedily it is perfectly safe *and* the fastest lap
+  on the map;
+* the **ring road** detours around the barriers — several cells longer,
+  through the gravel traps, but nowhere near anything terminal.
 
-* **Oil spills** — slippery; deflect movement sideways with probability
-  ``slip_prob``, potentially into barriers.
-* **Mud patches** — slow the car (step penalty).
-* **Crash barriers** — driving into one ends the race (terminal).
-* **Boosters** — one-time speed pads.  Collect at least ``min_boosters``
-  to unlock the finish line.
+The track is the classic *cliff walking* problem staged as a race.  Under
+ε-greedy exploration the express lane is exactly a cliff edge: every step
+beside the barriers risks an exploratory move into them.  **SARSA**
+(on-policy) prices that risk into its Q-values and settles on the ring
+road; **Q-Learning** (off-policy) backs up the greedy value and learns the
+express lane.  Racing the two learned policies side by side, Q-Learning
+wins on lap time — the textbook off-policy/on-policy split.
 
-The model is unknown — Q-Learning learns the track from sampled experience.
+Other hazards: **oil spills** (slippery — deflect sideways with
+probability ``slip_prob``; slipping into a wall = crash) and **gravel
+traps** (step penalty).
 
 State
 -----
-``(cell, booster_mask)`` — position plus a bitmask of boosters already
-collected.  The final state is crossing the (unlocked) finish line.
+``(cell, next_checkpoint)`` — position plus the index of the next gate to
+cross (0, 1, ... n_gates).  The final state is crossing the finish line
+after all gates.
 """
 
 from __future__ import annotations
@@ -31,38 +41,42 @@ from rl.envs.grid_base import ACTIONS, DOWN, GridBase, LEFT, RIGHT, UP, path_len
 Cell = Tuple[int, int]
 _DELTA = {UP: (-1, 0), DOWN: (1, 0), LEFT: (0, -1), RIGHT: (0, 1)}
 
-# '#'=barrier '.'=track 'S'=start 'F'=finish 'B'=booster
-# 'O'=oil 'M'=mud 'X'=crash barrier
+# '#'=off-track '.'=track 'S'=start 'F'=finish '1'/'2'/'3'=checkpoint gates
+# 'O'=oil 'M'=gravel trap 'X'=crash barrier 'R'=risky racing line marker
 
-# ── Street layout (walls only) ──────────────────────────────────────────────
+# ── Street layout (structure: city blocks + the barrier line) ──────────────
 #
-#   City blocks form a grid of streets.  Items are placed on top.
+#   Rows 0-6: city grid.  Row 7: the open ring road (safe detour).
+#   Row 8: construction crash barriers (the "cliff").  Row 9: the express
+#   lane — the shortest line on the map, right along the barriers.
 #
 TRACK_BASE_LAYOUT = [
-    "S.........",   # 0: starting straight
+    "..........",   # 0: north boulevard
     ".##.##.##.",   # 1: city blocks
     "..........",   # 2: cross street
     ".##.##.##.",   # 3: city blocks
-    "..........",   # 4: main boulevard
+    "..........",   # 4: mid boulevard
     ".##.##.##.",   # 5: city blocks
-    "..........",   # 6: cross street
-    ".##.##.##.",   # 7: city blocks
-    "..........",   # 8: final straight
-    ".##.##..#F",   # 9: finish
+    "..........",   # 6: ring boulevard (the safe detour)
+    "..........",   # 7: buffer row — keeps the detour away from the cliff
+    "..XXXXXX..",   # 8: construction barriers — the cliff
+    "S........F",   # 9: express lane
 ]
 
 # ── Default layout (hand-placed items) ──────────────────────────────────────
+#    Each checkpoint gate has one cell on the ring road (row 6) and one on
+#    the express lane (row 9) at the same column — two ways to drive the lap.
 DEFAULT_LAYOUT = [
-    "S.B.......",   # 0: start, booster
-    ".##.##.##.",   # 1: city blocks
-    "..OO..B...",   # 2: oil patch, booster
-    ".##.##.##.",   # 3: city blocks
-    "..M...X...",   # 4: mud, crash barrier
-    ".##.##.##.",   # 5: city blocks
-    "..B..OO...",   # 6: booster, oil
-    ".##.##.##.",   # 7: city blocks
-    "..M.....B.",   # 8: mud, booster
-    ".##.##..#F",   # 9: finish
+    "..........",   # 0: north side
+    ".##.##.##.",   # 1: infield blocks
+    "..........",   # 2: cross link
+    ".##.##.##.",   # 3: infield blocks
+    "...O..O...",   # 4: oil punishes the deep-north alternative
+    ".##.##.##.",   # 5: infield blocks
+    "..M1.M.2..",   # 6: ring road — gravel traps + safe checkpoint cells
+    "..........",   # 7: buffer row (clean)
+    "..XXXXXX..",   # 8: crash barriers — the cliff
+    "SRR1RRR2RF",   # 9: express lane (R = racing line) + risky checkpoint cells
 ]
 
 
@@ -77,7 +91,7 @@ def _parse_layout(layout: List[str]) -> Dict:
     mud: Set[Cell] = set()
     crash: Set[Cell] = set()
     shortcut: Set[Cell] = set()
-    boosters: List[Cell] = []
+    gate_cells: Dict[int, Set[Cell]] = {}
     start: Cell = (0, 0)
     finish: Cell = (rows - 1, cols - 1)
 
@@ -90,8 +104,8 @@ def _parse_layout(layout: List[str]) -> Dict:
                 start = cell
             elif ch == "F":
                 finish = cell
-            elif ch == "B":
-                boosters.append(cell)
+            elif ch in "123":
+                gate_cells.setdefault(int(ch), set()).add(cell)
             elif ch == "M":
                 mud.add(cell)
             elif ch == "O":
@@ -102,6 +116,7 @@ def _parse_layout(layout: List[str]) -> Dict:
             elif ch == "X":
                 crash.add(cell)
 
+    checkpoints = [gate_cells[k] for k in sorted(gate_cells)]
     return {
         "rows": rows,
         "cols": cols,
@@ -110,7 +125,7 @@ def _parse_layout(layout: List[str]) -> Dict:
         "mud": mud,
         "crash": crash,
         "shortcut": shortcut,
-        "boosters": boosters,
+        "checkpoints": checkpoints,
         "start": start,
         "finish": finish,
     }
@@ -125,7 +140,9 @@ def racing_layout_stats(layout: List[str]) -> Dict[str, object]:
     start, finish = parsed["start"], parsed["finish"]
 
     short = shortest_path(walls | crash, start, finish, rows, cols)
-    safe = shortest_path(walls, start, finish, rows, cols, extra_blocked=oil | crash)
+    # the "safe" line avoids oil AND the barrier-hugging racing line itself
+    safe = shortest_path(walls, start, finish, rows, cols,
+                         extra_blocked=oil | crash | parsed["shortcut"])
     short_len = path_length(short)
     safe_len = path_length(safe)
     return {
@@ -134,7 +151,7 @@ def racing_layout_stats(layout: List[str]) -> Dict[str, object]:
         "safe_gap": None if short_len is None or safe_len is None else safe_len - short_len,
         "oil": len(oil),
         "mud": len(parsed["mud"]),
-        "boosters": len(parsed["boosters"]),
+        "checkpoints": len(parsed["checkpoints"]),
         "crash": len(crash),
         "shortcut_cells": len(parsed["shortcut"]),
     }
@@ -142,49 +159,61 @@ def racing_layout_stats(layout: List[str]) -> Dict[str, object]:
 
 def generate_racing_layout(
     seed: int = 0,
-    n_oil: int = 5,
-    n_mud: int = 3,
-    n_boosters: int = 4,
-    n_crash: int = 2,
+    n_oil: int = 2,
+    n_mud: int = 2,
+    n_gates: int = 2,
+    n_crash: int = 8,          # kept for signature compat; the barrier line is structural
 ) -> List[str]:
-    """Generate a street race by placing items on the fixed city layout."""
-    rng = random.Random(seed)
-    R = C = 10
-    start = (0, 0)
-    finish = (R - 1, C - 1)
+    """Generate a Grand Prix lap on the fixed cliff-track structure.
 
-    base = _parse_layout(TRACK_BASE_LAYOUT)
-    walls = base["walls"]
+    The express lane / barrier line / ring road skeleton never changes —
+    that asymmetry IS the lesson — but every seed shuffles the checkpoint
+    gate columns, gravel traps and oil, so each map still plays
+    differently.  Each gate gets one express-lane cell and one ring-road
+    cell at the same column: two complete ways to drive the lap.
+    """
+    rng = random.Random(seed)
     layout = [list(row) for row in TRACK_BASE_LAYOUT]
 
-    free = [
-        (r, c) for r in range(R) for c in range(C)
-        if (r, c) not in walls and (r, c) != start and (r, c) != finish
-    ]
+    # racing line along the express lane
+    for c in range(1, 9):
+        layout[9][c] = "R"
 
-    path = shortest_path(walls, start, finish, R, C)
-    on_path = set(path or []) - {start, finish}
+    # checkpoint gates: gate 1 early-mid, gate 2 mid-late; both rows.
+    # (columns 3-7 keep every inter-gate value chain short enough for
+    # exploration along the cliff to actually learn it)
+    g1 = rng.randint(3, 4)
+    g2 = rng.randint(6, 7)
+    gate_cols = [g1, g2][:max(1, n_gates)]
+    for gi, col in enumerate(gate_cols, start=1):
+        layout[9][col] = str(gi)
+        layout[6][col] = str(gi)
 
-    off_path = [c for c in free if c not in on_path]
-    rng.shuffle(off_path)
+    # gravel traps on the ring road, avoiding the gate cells
+    trap_pool = [c for c in range(1, 9) if layout[6][c] == "."]
+    rng.shuffle(trap_pool)
+    for c in trap_pool[:max(0, n_mud)]:
+        layout[6][c] = "M"
 
-    for cell in off_path[:n_oil]:
+    # oil only at open intersections where a slip deflects onto open road
+    # (row 4 mid boulevard, between street gaps — never beside a wall)
+    oil_spots = [(4, c) for c in (3, 6)
+                 if layout[3][c] == "." and layout[5][c] == "."]
+    for cell in rng.sample(oil_spots, k=min(n_oil, len(oil_spots))):
         _put(layout, cell, "O")
 
-    for cell in off_path[n_oil:n_oil + n_crash]:
-        _put(layout, cell, "X")
+    result = ["".join(row) for row in layout]
 
-    booster_pool = off_path[n_oil + n_crash:]
-    rng.shuffle(booster_pool)
-    for cell in booster_pool[:n_boosters]:
-        _put(layout, cell, "B")
-
-    mud_candidates = [c for c in list(on_path) if layout[c[0]][c[1]] == "."]
-    rng.shuffle(mud_candidates)
-    for cell in mud_candidates[:n_mud]:
-        _put(layout, cell, "M")
-
-    return ["".join(row) for row in layout]
+    # sanity: express lane must be the unique 9-step line; a crash-free
+    # detour must exist and be meaningfully longer
+    parsed = _parse_layout(result)
+    blocked = parsed["walls"] | parsed["crash"]
+    express = path_length(shortest_path(blocked, parsed["start"], parsed["finish"], 10, 10))
+    safe = path_length(shortest_path(blocked, parsed["start"], parsed["finish"], 10, 10,
+                                     extra_blocked=parsed["shortcut"] | parsed["oil"]))
+    if express != 9 or safe is None or safe < express + 3:
+        return [row[:] for row in DEFAULT_LAYOUT]
+    return result
 
 
 class RacingEnv:
@@ -193,10 +222,9 @@ class RacingEnv:
         layout: List[str] = None,
         slip_prob: float = 0.2,
         max_steps: int = 200,
-        min_boosters: int = 3,
         r_step: float = -1.0,
         r_finish: float = 200.0,
-        r_boost: float = 20.0,
+        r_checkpoint: float = 40.0,
         r_mud: float = -5.0,
         r_crash: float = -200.0,
         r_offtrack: float = -30.0,
@@ -210,13 +238,12 @@ class RacingEnv:
         self.cols = parsed["cols"]
         self.r_step = r_step
         self.r_finish = r_finish
-        self.r_boost = r_boost
+        self.r_checkpoint = r_checkpoint
         self.r_mud = r_mud
         self.r_crash = r_crash
         self.r_offtrack = r_offtrack
         self.r_wall = r_wall
         self.r_finish_locked = r_finish_locked
-        self.min_boosters = min_boosters
         self.max_steps = max_steps
         self.rng = random.Random(seed)
 
@@ -225,31 +252,25 @@ class RacingEnv:
         self.mud = parsed["mud"]
         self.crash = parsed["crash"]
         self.shortcut_cells = parsed["shortcut"]
-        self.boosters = parsed["boosters"]
+        self.checkpoints: List[Set[Cell]] = parsed["checkpoints"]
+        self.n_gates = len(self.checkpoints)
         self.start = parsed["start"]
         self.finish = parsed["finish"]
-        self.boost_index: Dict[Cell, int] = {c: i for i, c in enumerate(self.boosters)}
         self.grid = GridBase(self.rows, self.cols, walls=self.walls, slippery=self.oil, slip_prob=slip_prob)
 
         self.n_actions = len(ACTIONS)
         self.pos: Cell = self.start
-        self.bmask: int = 0
+        self.next_cp: int = 0
         self.steps = 0
 
-    def collected_count(self, bmask: int) -> int:
-        return bin(bmask).count("1")
-
-    def finish_unlocked(self, bmask: int) -> bool:
-        return self.collected_count(bmask) >= self.min_boosters
-
-    def remaining_boosters(self, bmask: int) -> List[Cell]:
-        return [c for c, i in self.boost_index.items() if not (bmask >> i) & 1]
+    def finish_unlocked(self, next_cp: int) -> bool:
+        return next_cp >= self.n_gates
 
     def reset(self):
         self.pos = self.start
-        self.bmask = 0
+        self.next_cp = 0
         self.steps = 0
-        return (self.pos, self.bmask)
+        return (self.pos, self.next_cp)
 
     def step(self, action: int):
         ncell, slipped, hit_wall = self.grid.sample_cell(self.pos, action, self.rng)
@@ -266,8 +287,9 @@ class RacingEnv:
                 "success": False,
                 "shortcut": self.pos in self.shortcut_cells,
             }
-            return (self.pos, self.bmask), reward, True, info
+            return (self.pos, self.next_cp), reward, True, info
 
+        checkpoint = False
         if hit_wall:
             dr, dc = _DELTA[action]
             target = (self.pos[0] + dr, self.pos[1] + dc)
@@ -275,14 +297,15 @@ class RacingEnv:
         else:
             if ncell in self.mud:
                 reward += self.r_mud
-            idx = self.boost_index.get(ncell)
-            if idx is not None and not (self.bmask >> idx) & 1:
-                reward += self.r_boost
-                self.bmask |= 1 << idx
+            if (self.next_cp < self.n_gates
+                    and ncell in self.checkpoints[self.next_cp]):
+                reward += self.r_checkpoint
+                self.next_cp += 1
+                checkpoint = True
 
         finished = False
         if ncell == self.finish:
-            if self.finish_unlocked(self.bmask):
+            if self.finish_unlocked(self.next_cp):
                 reward += self.r_finish
                 finished = True
             else:
@@ -295,13 +318,14 @@ class RacingEnv:
             "slipped": slipped,
             "crash": False,
             "success": finished,
+            "checkpoint": checkpoint,
             "shortcut": ncell in self.shortcut_cells,
         }
-        return (self.pos, self.bmask), reward, done, info
+        return (self.pos, self.next_cp), reward, done, info
 
     def render_state(self) -> dict:
         return {
             "pos": self.pos,
-            "bmask": self.bmask,
-            "finish_unlocked": self.finish_unlocked(self.bmask),
+            "next_cp": self.next_cp,
+            "finish_unlocked": self.finish_unlocked(self.next_cp),
         }

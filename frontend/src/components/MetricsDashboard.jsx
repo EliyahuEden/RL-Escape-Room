@@ -4,14 +4,16 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 
-const AXIS = { stroke: '#39456e', fontSize: 10, tickLine: false };
-const GRID = { stroke: '#182042', strokeDasharray: '3 6' };
+// theme-aware via CSS variables (resolved live, so the toggle re-skins charts)
+const AXIS = { stroke: 'var(--chart-axis)', fontSize: 10, tickLine: false };
+const GRID = { stroke: 'var(--chart-grid)', strokeDasharray: '3 6' };
 const TOOLTIP = {
   contentStyle: {
-    background: '#0c1226', border: '1px solid #2c3768', borderRadius: 8,
+    background: 'var(--tooltip-bg)', border: '1px solid var(--line-bright)',
+    borderRadius: 8, color: 'var(--text)',
     fontFamily: '"JetBrains Mono", monospace', fontSize: 12,
   },
-  labelStyle: { color: '#7e88ab' },
+  labelStyle: { color: 'var(--muted)' },
 };
 
 function toRows(series, xKey, keys) {
@@ -78,16 +80,16 @@ export default function MetricsDashboard({ series, summary, evalSummary }) {
     charts.push(
       <ChartCard key="dpd" title="Bellman residual Δ per sweep (log scale)">
         <Lines rows={dpRows.filter((r) => r.dp_delta > 0)}
-          defs={[['dp_delta', '#ff4d5a', 2]]} logY />
+          defs={[['dp_delta', 'var(--red)', 2]]} logY />
       </ChartCard>,
       <ChartCard key="dpv" title="Value of the start state per sweep">
-        <Lines rows={dpRows} defs={[['dp_start_value', '#38bdf8', 2]]} />
+        <Lines rows={dpRows} defs={[['dp_start_value', 'var(--sky)', 2]]} />
       </ChartCard>,
     );
     if (series.dp_policy_changes) {
       charts.push(
         <ChartCard key="dpc" title="Policy changes per iteration">
-          <Lines rows={dpRows} defs={[['dp_policy_changes', '#fbbf24', 2]]} />
+          <Lines rows={dpRows} defs={[['dp_policy_changes', 'var(--amber)', 2]]} />
         </ChartCard>,
       );
     }
@@ -96,44 +98,52 @@ export default function MetricsDashboard({ series, summary, evalSummary }) {
   const epRows = toRows(series, 'episode', [
     'reward', 'reward_avg', 'steps', 'epsilon', 'success_rate', 'failure_rate',
     'td_error', 'loss', 'camera_hits', 'caught', 'trap_hits', 'crashes', 'shortcuts',
+    'rival_reward_avg', 'rival_success_rate',
   ]);
+  const hasRival = !!series.rival_reward_avg;
 
   if (series.reward) {
     charts.push(
       <ChartCard key="rw"
         title={series.dp_delta ? 'Greedy evaluation reward per episode'
-          : 'Reward per episode (+ moving average)'}>
+          : hasRival ? 'Reward: Q-Learning car vs SARSA rival (moving average)'
+            : 'Reward per episode (+ moving average)'}>
         <Lines rows={epRows}
-          defs={[['reward', 'rgba(139,92,246,0.4)', 1], ['reward_avg', '#ffd23f', 2.2]]} />
+          defs={[['reward', 'rgba(139,92,246,0.4)', 1], ['reward_avg', 'var(--gold)', 2.2],
+            ...(hasRival ? [['rival_reward_avg', 'var(--purple)', 2]] : [])]} />
       </ChartCard>,
     );
   }
   if (series.steps) {
     charts.push(
       <ChartCard key="st" title="Steps per episode">
-        <Lines rows={epRows} defs={[['steps', '#38bdf8', 1.4]]} />
+        <Lines rows={epRows} defs={[['steps', 'var(--sky)', 1.4]]} />
       </ChartCard>,
     );
   }
   if (series.success_rate) {
     charts.push(
-      <ChartCard key="sr" title="Success / failure rate (rolling 50)">
+      <ChartCard key="sr" title={hasRival
+        ? 'Success rate: Q-Learning car vs SARSA rival (rolling 50)'
+        : 'Success / failure rate (rolling 50)'}>
         <Lines rows={epRows}
-          defs={[['success_rate', '#34d399', 2], ['failure_rate', 'rgba(255,77,90,0.6)', 1.4]]} />
+          defs={[['success_rate', 'var(--green)', 2],
+            ...(hasRival ? [['rival_success_rate', 'var(--purple)', 1.8]]
+              : [['failure_rate', 'rgba(255,77,90,0.6)', 1.4]])]} />
       </ChartCard>,
     );
   }
   if (series.epsilon) {
     charts.push(
       <ChartCard key="eps" title="Exploration rate ε over time">
-        <Lines rows={epRows} defs={[['epsilon', '#a78bfa', 2]]} />
+        <Lines rows={epRows} defs={[['epsilon', 'var(--purple)', 2]]} />
       </ChartCard>,
     );
   }
   if (series.td_error) {
     charts.push(
       <ChartCard key="td" title="Mean |TD error| per episode">
-        <Lines rows={epRows} defs={[['td_error', '#f472b6', 1.6]]} />
+        <Lines rows={epRows} defs={[['td_error', 'var(--pink)', 1.6]]} />
       </ChartCard>,
     );
   }
@@ -141,16 +151,16 @@ export default function MetricsDashboard({ series, summary, evalSummary }) {
     charts.push(
       <ChartCard key="loss" title="DQN training loss (per-episode mean)">
         <Lines rows={epRows.filter((r) => r.loss !== undefined)}
-          defs={[['loss', '#fb923c', 1.6]]} />
+          defs={[['loss', 'var(--orange)', 1.6]]} />
       </ChartCard>,
     );
   }
   const hazardDefs = [
-    ['camera_hits', '#ff4d5a', 'Camera detections'],
-    ['caught', '#f87171', 'Caught by guards'],
-    ['trap_hits', '#fb923c', 'Trap hits'],
-    ['crashes', '#ff4d5a', 'Crashes'],
-    ['shortcuts', '#38bdf8', 'Shortcut tiles used'],
+    ['camera_hits', 'var(--red)', 'Camera detections'],
+    ['caught', 'var(--red-2)', 'Caught by guards'],
+    ['trap_hits', 'var(--orange)', 'Trap hits'],
+    ['crashes', 'var(--red)', 'Crashes'],
+    ['shortcuts', 'var(--sky)', 'Shortcut tiles used'],
   ].filter(([k]) => series[k] && series[k].some((v) => v));
   if (hazardDefs.length) {
     charts.push(
@@ -183,6 +193,11 @@ export default function MetricsDashboard({ series, summary, evalSummary }) {
           {evalSummary?.success_rate != null && (
             <span className="chip green">
               GREEDY EVAL {(evalSummary.success_rate * 100).toFixed(0)}%
+            </span>
+          )}
+          {evalSummary?.beat_rival != null && (
+            <span className="chip violet">
+              🏁 RACES WON {(evalSummary.beat_rival * 100).toFixed(0)}%
             </span>
           )}
           {summary?.train_time != null && (

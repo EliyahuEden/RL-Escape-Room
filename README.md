@@ -21,38 +21,52 @@ frame.
 
 ## Quick start
 
-**One-click (Windows):** double-click **`start.bat`** (or run `.\start.bat`) — it builds the
-frontend if needed, starts the server and opens **http://localhost:8000**.
-`start.bat dev` opens developer mode instead (backend + hot-reload frontend);
-`start.bat build` forces a frontend rebuild after you edit frontend code.
+**Prerequisites (install once):** [Python 3.10+](https://python.org) (64-bit, tick *"Add
+python.exe to PATH"*) and [Node.js 18+](https://nodejs.org). Everything else is automatic.
 
-**Manual:**
+### ▶ One click (Windows)
+
+Double-click **`start.bat`**. On the first run it sets up everything by itself — creates the
+Python venv, installs the Python packages (PyTorch is big, give it a few minutes), installs
+the frontend packages, builds the site — then starts the server and opens
+**http://localhost:8000**. Every later run starts in seconds.
+
+On macOS / Linux: `./start.sh` does the same.
+
+### ▶ Or copy-paste (Windows PowerShell, from the project folder)
 
 ```powershell
-# 1. install
-pip install -r requirements.txt
-npm install --prefix frontend
-
-# 2. run the backend (FastAPI, port 8000) — terminal 1, from the project root
-python -m backend.api.main
-
-# 3. run the frontend (Vite dev server, port 5173 — proxies /api to the backend) — terminal 2
-npm run dev --prefix frontend
+py -3 -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+cd frontend; npm install; npm run build; cd ..
+.\.venv\Scripts\python -m backend.api.main
 ```
 
-> **Windows PowerShell notes**
-> * Use `;` instead of `&&` to chain commands (e.g. `cd frontend; npm run dev`).
-> * If you see *"running scripts is disabled on this system"*, either call `npm.cmd`
->   instead of `npm`, or run once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
-> * `python -m backend.api.main` must be run from the **project root**, not from `frontend/`.
+Then open **http://localhost:8000**, pick a room, press **START TRAINING**.
 
-Open **http://localhost:5173**, pick a room, press **START TRAINING**.
+### ▶ Developer mode (hot reload while editing frontend code)
 
-**Single-server mode:** after `npm run build` inside `frontend/`, the FastAPI server also serves
-the built site — then `python -m backend.api.main` alone runs the whole project on
-**http://localhost:8000**.
+`start.bat dev` — opens the backend (port 8000) and the Vite dev server
+(**http://localhost:5173**, proxies `/api` to the backend) in two windows. Manually that is
+`python -m backend.api.main` in one terminal and `cd frontend; npm run dev` in another.
+After editing frontend code, `start.bat build` rebuilds the bundle served on port 8000.
 
-**Streamlit fallback:** the original dashboard still works: `streamlit run app.py`.
+> **If something goes wrong**
+> * **404 / "not built" message on http://localhost:8000** — the frontend was never built;
+>   run `start.bat build` (or `cd frontend; npm run build`) and restart the server.
+> * **`[winerror 10048] only one usage of each socket address`** — another copy of the server
+>   already holds port 8000; close it (find it with `netstat -ano | findstr :8000`).
+> * **`No module named fastapi` / `torch`** — you're using the wrong Python; always run
+>   through `start.bat` or `.\.venv\Scripts\python`, not the system `python`.
+> * **"running scripts is disabled on this system"** — call `npm.cmd` instead of `npm`, or
+>   run once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+> * PowerShell 5 chains commands with `;` (there is no `&&`), and
+>   `python -m backend.api.main` must run from the **project root**, not from `frontend/`.
+
+**Session-only training data:** artefacts under `results/` live only while the server runs —
+they are deleted when the server shuts down (and any crash leftovers are cleared on the next
+start), so every launch begins with five untrained rooms and the repo never accumulates
+training output (`results/` is gitignored too).
 
 ---
 
@@ -80,14 +94,12 @@ frontend/            ← React 18 + Vite + Recharts + HTML5 Canvas
   src/rooms/         per-room briefing views
   src/pages/         Home · Rooms · Room · Algorithms · Results
 
-results/             ← everything training produces, as plain JSON
-  metrics/room{N}.json      per-episode series + summary
+results/             ← everything training produces, as plain JSON (session-scoped:
+  metrics/room{N}.json      wiped on shutdown)  per-episode series + summary
   replays/room{N}/*.json    frame-by-frame episode replays + index.json
   models/                   pickled Q-tables / DP policies · DQN checkpoints (.pt)
   policies/room{N}.json     value heatmap + greedy-arrow export (rooms 1–3)
-  configs/room{N}.json      saved hyperparameter overrides
-
-ui/, ui_canvas/, app.py     ← original Streamlit dashboard (fallback, unchanged)
+  configs/room{N}.json      saved hyperparameter overrides (the only part that persists)
 ```
 
 **Key design point:** the algorithms in `rl/algos` were **not modified**. The backend records
@@ -129,7 +141,7 @@ change) plus compact frames:
 ```
 
 Room-specific frame fields: Pacman `p/coins/guard/open` · Museum `p/d/guards/alarm` ·
-Racing `p/b/open` · Football `p/defs/keeper/shoot` (+ `fl/ball/z` flight frames so kicks
+Racing `p/ncp/open` (+ `rv` rival car in race evals) · Football `p/defs/keeper/shoot` (+ `fl/ball/z` flight frames so kicks
 animate) · Cross the Road `p/cars` (car colors/sizes live in the layout).
 During training only **milestone episodes** are recorded (1, 2, spread, last) plus every
 greedy evaluation episode — enough to *see* learning without gigabytes of JSON.
@@ -150,19 +162,33 @@ greedy evaluation episode — enough to *see* learning without gigabytes of JSON
   landscape flips completely between "coins left" and "all collected".
 
 ### Room 2 — Museum Heist · SARSA
-* **State** `(cell, has_diamond, guard patrol phase, alarm timer)`.
+* **State** `(cell, has_diamond, guard patrol phase)` while the museum is quiet; once the
+  **alarm** is raised it becomes `(cell, has_diamond, alarmed, guard positions)` — chasing
+  guards depend on history, so their cells must enter the state to stay Markov.
 * **Actions** 4-connected moves.
-* **Rewards** step −1 · diamond +30 · escape +100 · camera −50 (+ alarm: guards double speed for
-  5 turns) · trap −15 · caught −50 (terminal) · slip −5.
+* **Rewards** step −1 · diamond +30 · escape +100 · camera −50 **+ permanent manhunt** (one
+  sighting and every guard abandons its patrol to chase you for the rest of the episode) ·
+  trap −15 · caught −50 (terminal) · slip −5.
 * **Why SARSA** on-policy learning prices the exploration risk into Q, so the thief keeps a
-  safety margin around cameras — visible in the replays.
+  safety margin around cameras — visible in the replays. Generated layouts are verified to
+  contain a camera/trap/patrol-free stealth route.
 
-### Room 3 — Street Racing · Q-Learning
-* **State** `(cell, booster-bitmask)` — the finish stays locked until `min_boosters` are collected.
-* **Rewards** step −1 · booster +20 · finish +200 · crash −200 (terminal) · mud −5 ·
-  locked-finish bump −10 · off-track penalties.
-* **Why Q-Learning** the off-policy max-target learns the optimal racing line even while the
-  behaviour policy is still exploring — watch it shave past oil slicks that SARSA would avoid.
+### Room 3 — Grand Prix · Q-Learning **vs a SARSA rival**
+* **The race** your Q-Learning car races a SARSA rival trained on the identical F1 circuit with
+  identical hyperparameters. The lap has **checkpoint gates** (cross 1, then 2, then the finish
+  opens) and every gate exists twice — once on each route — so both are full laps. The track is
+  *cliff walking* staged as a Grand Prix: the **express lane** (9 steps) hugs a wall of crash
+  barriers — safe when driven greedily, fatal to exploratory wobbles — while the **ring road**
+  detours safely through the gravel (≈15 steps).
+* **State** `(cell, next-checkpoint)` per car — each tracks its own lap progress.
+* **Rewards** step −1 · checkpoint +40 · finish +200 · crash −200 (terminal) · gravel −5 ·
+  locked-finish bump −10 · off-track penalties. First car home wins the race.
+* **Why it works** Q-Learning's off-policy max-target ignores its own exploration accidents and
+  learns the barrier-hugging express lane; SARSA's on-policy target prices every ε-wobble into
+  the barriers and settles on the ring road. Same table, same settings — the race verdict *is*
+  the off-policy/on-policy distinction (minimum ε is kept at 0.15 so the distinction survives).
+* **Watch** the reward chart overlays both learning curves; eval replays show both cars racing
+  side by side on their two routes with a 🏁 RACES WON score, and the loser finishes on camera.
 
 ### Room 4 — Football Striker · DQN
 * **State** continuous: `x, y, Vx, Vy`, keeper position + patrol direction, per-defender
@@ -230,8 +256,8 @@ python -m backend.training.train --room 3 --set episodes=1500 alpha=0.15
 
 ## What changed vs. the original project (frontend upgrade)
 
-* The Streamlit dashboard is replaced (but kept as a fallback) by a **React + Vite website**
-  with a dark arcade design system, per-room accent themes, HUD navigation and page transitions.
+* The original Streamlit dashboard is replaced by a **React + Vite website** with an arcade
+  design system (dark + light themes), per-room accents, HUD navigation and page transitions.
 * Every room is rendered as a **living HTML5 Canvas game**: neon Pacman maze with animated
   mouth and ghost guard; museum with camera sweeps, laser traps and alarm mode; street circuit
   with lit city blocks, oil sheen and checkered finish; football pitch with physical ball

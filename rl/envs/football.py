@@ -211,6 +211,21 @@ class FootballEnv:
                 passed_keeper = True
                 if abs(by - self.keeper_y) <= self.keeper_reach:
                     outcome = "save"
+                    # visual: the keeper catches it IN FRONT of the line and
+                    # parries the ball back out — otherwise the replay shows
+                    # the ball on the goal line and a save looks like a goal
+                    side = 1.0 if by >= self.keeper_y else -1.0
+                    bx, by = self.keeper_x - 0.45, self.keeper_y
+                    flight[-1] = {"ball": (bx, by),
+                                  "keeper": (self.keeper_x, self.keeper_y)}
+                    vpx, vpy = -0.30 * speed, side * 2.2
+                    for _ in range(16):
+                        bx += vpx * self.dt
+                        by += vpy * self.dt
+                        vpx *= 0.88
+                        vpy *= 0.88
+                        flight.append({"ball": (bx, by),
+                                       "keeper": (self.keeper_x, self.keeper_y)})
                     break
             if bx >= self.W:
                 outcome = "goal" if self.goal_lo <= by <= self.goal_hi else "miss"
@@ -487,6 +502,21 @@ class FreeKickEnv:
             if bx >= self.keeper_x_pos and bz < 2.5:
                 if abs(by - self.keeper_y) <= self.keeper_reach:
                     outcome = "save"
+                    # keeper catches in front of the line + parries it clear
+                    side = 1.0 if by >= self.keeper_y else -1.0
+                    bx, by = self.keeper_x_pos - 0.45, self.keeper_y
+                    bz = min(bz, 1.6)
+                    flight[-1] = {"ball": (bx, by), "ball_z": bz,
+                                  "keeper": (self.keeper_x_pos, self.keeper_y)}
+                    vpx, vpy = -0.30 * speed, side * 2.2
+                    for _ in range(16):
+                        bx += vpx * self.dt
+                        by += vpy * self.dt
+                        bz = max(0.0, bz - 0.12)
+                        vpx *= 0.88
+                        vpy *= 0.88
+                        flight.append({"ball": (bx, by), "ball_z": bz,
+                                       "keeper": (self.keeper_x_pos, self.keeper_y)})
                     break
 
             if bx >= self.W:

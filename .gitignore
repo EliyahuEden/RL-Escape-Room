@@ -9,5 +9,5 @@ runs/
 frontend/node_modules/
 frontend/dist/
 
-# training artefacts (models are binary; JSON results may be committed if wanted)
-results/models/
+# training artefacts — session-scoped, wiped on every server start
+results/

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 
 const LINKS = [
@@ -10,6 +10,16 @@ const LINKS = [
 
 /** Fixed top HUD + ambient arcade background behind every page. */
 export default function Layout({ training, children }) {
+  // index.html applies the saved theme before first paint; this just mirrors it
+  const [theme, setTheme] = useState(
+    () => localStorage.getItem('theme') || 'dark',
+  );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
   return (
     <>
       <div className="arcade-bg" />
@@ -30,6 +40,13 @@ export default function Layout({ training, children }) {
           <span className={`led ${training ? 'busy' : ''}`} />
           {training ? 'AGENT TRAINING…' : 'SYSTEMS READY'}
         </div>
+        <button
+          className="theme-toggle"
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label="Toggle color theme">
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
       </header>
       {children}
     </>

@@ -41,11 +41,12 @@ _EVENT_FLAGS = [
     ("slipped", "slip"), ("hit_wall", "wall"), ("door_bump", "locked door"),
     ("camera", "camera!"), ("trap", "trap"), ("caught", "caught"),
     ("alarm_triggered", "alarm!"), ("crash", "crash"),
+    ("checkpoint", "checkpoint"),
     ("shortcut", "shortcut"), ("entered_shoot", "shooting zone"),
     ("dodge", "dodged"),
 ]
 
-GOOD_EVENTS = {"coin", "diamond", "boost", "escaped", "finished", "goal",
+GOOD_EVENTS = {"coin", "diamond", "checkpoint", "escaped", "finished", "goal",
                "crossed", "dodged", "shooting zone", "shortcut"}
 
 
@@ -128,7 +129,7 @@ def museum_frame(env: MuseumEnv, action, reward, cum, done, info) -> dict:
         "p": list(env.pos),
         "d": int(env.has_diamond),
         "guards": [list(g) for g in env.guard_positions()],
-        "alarm": env.alarm_timer > 0,
+        "alarm": env.alarmed,
     }
 
 
@@ -142,10 +143,10 @@ def racing_layout(env: RacingEnv) -> dict:
         "oil": sorted(env.oil),
         "mud": sorted(env.mud),
         "crash": sorted(env.crash),
-        "boosters": [list(b) for b in env.boosters],
+        "checkpoints": [sorted([list(c) for c in gate])
+                        for gate in env.checkpoints],
         "start": list(env.start),
         "finish": list(env.finish),
-        "min_boosters": env.min_boosters,
     }
 
 
@@ -153,14 +154,12 @@ def racing_frame(env: RacingEnv, action, reward, cum, done, info) -> dict:
     ev = events_from(info)
     if info.get("success"):
         ev = [e for e in ev if e != "success"] + ["finished"]
-    if reward and reward >= env.r_boost - 1.5 and not info.get("success"):
-        ev.append("boost")
     return {
         "t": env.steps, "a": action, "r": _round2(reward or 0.0), "cum": cum,
         "done": done, "ev": ev,
         "p": list(env.pos),
-        "b": [list(c) for c in env.remaining_boosters(env.bmask)],
-        "open": env.finish_unlocked(env.bmask),
+        "ncp": env.next_cp,
+        "open": env.finish_unlocked(env.next_cp),
     }
 
 
@@ -227,8 +226,11 @@ def football_frame(env, action, reward, cum, done, info) -> List[dict]:
     ev = events_from(info)
     t = env.attempts if isinstance(env, FreeKickEnv) else env.steps
     frame = dict(base)
+    # while a flight follows, the episode visually ends on the LAST flight
+    # frame — marking the kick frame done would flash "NO GOAL" pre-shot
     frame.update({"t": t, "a": action, "r": _round2(reward or 0.0), "cum": cum,
-                  "done": done, "ev": [] if env._flight else ev})
+                  "done": done and not env._flight,
+                  "ev": [] if env._flight else ev})
 
     if env._flight:
         t = frame["t"]

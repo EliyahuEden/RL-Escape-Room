@@ -9,7 +9,9 @@ The model is unknown — SARSA learns the environment from sampled experience.
 The museum layout features:
 * Gallery rooms connected by corridors with **pillars** and **exhibits**
 * A **vault** at the top where the diamond is kept
-* **Camera surveillance zones** covering key corridors (heavy penalty)
+* **Camera surveillance zones** covering key corridors (heavy penalty — and
+  one sighting triggers the **alarm**: every guard abandons its patrol and
+  chases the robber for the rest of the heist)
 * **Laser traps** near the vault (penalty)
 * **Patrol guards** roaming the galleries (terminal if caught)
 * **Slippery marble floors** that can deflect movement
@@ -20,8 +22,12 @@ placed — so every seed gives a different heist challenge on a familiar map.
 
 State
 -----
-``(cell, has_diamond)`` with an added ``guard_phase`` when patrol guards exist.
-The final state is reaching the exit with the diamond.
+``(cell, has_diamond)`` plus the guard information when guards exist: the
+patrol ``guard_phase`` while the museum is quiet, or — once the alarm has
+been raised — the alarm flag together with the guards' actual positions
+(the chase makes guard cells depend on history, so they must be part of the
+state to keep it Markov).  The final state is reaching the exit with the
+diamond.
 """
 
 from __future__ import annotations
@@ -205,7 +211,7 @@ def museum_layout_stats(layout: List[str]) -> Dict[str, object]:
 
 def generate_museum_layout(
     seed: int = 0,
-    n_cameras: int = 9,
+    n_cameras: int = 7,
     n_traps: int = 2,
     n_slippery: int = 6,
     n_guards: int = 2,
@@ -215,6 +221,11 @@ def generate_museum_layout(
     The wall structure stays the same (like a real building) but every seed
     gives a different diamond location, camera placement, trap positions,
     guard patrols, and slippery marble tiles.
+
+    Since one camera sighting now triggers a rest-of-episode manhunt, every
+    generated heist is **verified to have a camera/trap-free route**
+    (start → diamond → exit); layouts are re-rolled — with progressively
+    fewer cameras — until one exists.
     """
     rng = random.Random(seed)
     R = C = 10
@@ -224,64 +235,77 @@ def generate_museum_layout(
     base = _parse_layout(MUSEUM_BASE_LAYOUT)
     walls = base["walls"]
 
-    layout = [list(row) for row in MUSEUM_BASE_LAYOUT]
+    for attempt in range(60):
+        # every 15 failed attempts, ease off one camera
+        cams_now = max(3, n_cameras - attempt // 15)
+        layout = [list(row) for row in MUSEUM_BASE_LAYOUT]
 
-    free = [
-        (r, c) for r in range(R) for c in range(C)
-        if (r, c) not in walls and (r, c) != start and (r, c) != exit_cell
-    ]
+        free = [
+            (r, c) for r in range(R) for c in range(C)
+            if (r, c) not in walls and (r, c) != start and (r, c) != exit_cell
+        ]
 
-    vault_cells = [(r, c) for r, c in free if r <= 1]
-    diamond = rng.choice(vault_cells) if vault_cells else free[0]
-    _put(layout, diamond, "G")
-    reserved = {start, exit_cell, diamond}
+        vault_cells = [(r, c) for r, c in free if r <= 1]
+        diamond = rng.choice(vault_cells) if vault_cells else free[0]
+        _put(layout, diamond, "G")
+        reserved = {start, exit_cell, diamond}
 
-    placeable = [c for c in free if c not in reserved]
-    rng.shuffle(placeable)
+        placeable = [c for c in free if c not in reserved]
+        rng.shuffle(placeable)
 
-    path_sd = shortest_path(walls, start, diamond, R, C)
-    path_de = shortest_path(walls, diamond, exit_cell, R, C)
-    on_path = set(path_sd or []) | set(path_de or []) if path_sd and path_de else set()
-    on_path -= reserved
+        path_sd = shortest_path(walls, start, diamond, R, C)
+        path_de = shortest_path(walls, diamond, exit_cell, R, C)
+        on_path = set(path_sd or []) | set(path_de or []) if path_sd and path_de else set()
+        on_path -= reserved
 
-    near_path = [c for c in placeable if c in on_path]
-    off_path = [c for c in placeable if c not in on_path]
+        near_path = [c for c in placeable if c in on_path]
+        off_path = [c for c in placeable if c not in on_path]
 
-    cameras_placed: List[Cell] = []
-    for cell in near_path[:n_cameras]:
-        _put(layout, cell, "V")
-        cameras_placed.append(cell)
-    remaining_cam = n_cameras - len(cameras_placed)
-    if remaining_cam > 0:
-        for cell in off_path[:remaining_cam]:
+        cameras_placed: List[Cell] = []
+        for cell in near_path[:cams_now]:
             _put(layout, cell, "V")
             cameras_placed.append(cell)
-            off_path = off_path[1:]
+        remaining_cam = cams_now - len(cameras_placed)
+        if remaining_cam > 0:
+            for cell in off_path[:remaining_cam]:
+                _put(layout, cell, "V")
+                cameras_placed.append(cell)
+                off_path = off_path[1:]
 
-    used = set(cameras_placed)
-    trap_pool = [c for c in near_path if c not in used]
-    rng.shuffle(trap_pool)
-    for cell in trap_pool[:n_traps]:
-        _put(layout, cell, "T")
-        used.add(cell)
+        used = set(cameras_placed)
+        trap_pool = [c for c in near_path if c not in used]
+        rng.shuffle(trap_pool)
+        for cell in trap_pool[:n_traps]:
+            _put(layout, cell, "T")
+            used.add(cell)
 
-    guard_pool = [c for c in placeable if c not in used and c not in on_path]
-    rng.shuffle(guard_pool)
-    for cell in guard_pool[:n_guards]:
-        _put(layout, cell, "P")
-        used.add(cell)
+        guard_pool = [c for c in placeable if c not in used and c not in on_path]
+        rng.shuffle(guard_pool)
+        for cell in guard_pool[:n_guards]:
+            _put(layout, cell, "P")
+            used.add(cell)
 
-    slip_pool = [c for c in placeable if c not in used]
-    rng.shuffle(slip_pool)
-    for cell in slip_pool[:n_slippery]:
-        _put(layout, cell, "~")
+        slip_pool = [c for c in placeable if c not in used]
+        rng.shuffle(slip_pool)
+        for cell in slip_pool[:n_slippery]:
+            _put(layout, cell, "~")
 
-    return ["".join(row) for row in layout]
+        # a stealth route must exist: both heist legs passable without
+        # stepping into a camera zone, a laser trap, or a guard patrol lane
+        guard_cells: Set[Cell] = set()
+        for gcell in guard_pool[:n_guards]:
+            guard_cells.update(museum_guard_route(gcell, walls, exit_cell, R, C))
+        avoid = (set(cameras_placed) | set(trap_pool[:n_traps]) | guard_cells)
+        avoid -= {start, diamond, exit_cell}
+        ok_sd = shortest_path(walls, start, diamond, R, C, extra_blocked=avoid)
+        ok_de = shortest_path(walls, diamond, exit_cell, R, C, extra_blocked=avoid)
+        if ok_sd and ok_de:
+            return ["".join(row) for row in layout]
+
+    return list(DEFAULT_LAYOUT)  # extremely unlucky seed: curated fallback
 
 
 class MuseumEnv:
-    ALARM_DURATION = 5
-
     def __init__(
         self,
         layout: List[str] = None,
@@ -339,32 +363,53 @@ class MuseumEnv:
         self.pos: Cell = self.start
         self.has_diamond: int = 0
         self.guard_phase = 0
-        self.alarm_timer: int = 0
+        self.alarmed: bool = False
+        self.guard_cells: List[Cell] = self._patrol_positions(0)
         self.steps = 0
 
     def _guard_route(self, start: Cell) -> List[Cell]:
         return museum_guard_route(start, self.walls, self.exit, self.rows, self.cols)
 
-    def _guard_speed(self) -> int:
-        return 2 if self.alarm_timer > 0 else 1
+    def _patrol_positions(self, phase: int) -> List[Cell]:
+        return [route[(phase + i * 2) % len(route)]
+                for i, route in enumerate(self.guard_routes)]
 
-    def guard_positions(self, phase: int = None) -> List[Cell]:
-        if phase is None:
-            phase = self.guard_phase
-        return [route[(phase + i * 2) % len(route)] for i, route in enumerate(self.guard_routes)]
+    def guard_positions(self) -> List[Cell]:
+        return list(self.guard_cells)
+
+    # -- alarm chase ---------------------------------------------------------
+    def _chase_step(self, guard: Cell, target: Cell) -> Cell:
+        """One deterministic greedy step that closes distance to the robber.
+
+        Deterministic (fixed tie-breaking) so the transition stays a function
+        of the state — the guards' positions are carried in the state.
+        Guards never block the exit cell.
+        """
+        candidates = [guard]
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nb = (guard[0] + dr, guard[1] + dc)
+            if (self.grid.in_bounds(nb) and nb not in self.walls
+                    and nb != self.exit):
+                candidates.append(nb)
+        return min(candidates,
+                   key=lambda c: (abs(c[0] - target[0]) + abs(c[1] - target[1]),
+                                  c[0], c[1]))
 
     def _state(self):
-        if self.guard_routes:
-            if self.alarm_enabled:
-                return (self.pos, self.has_diamond, self.guard_phase, self.alarm_timer)
-            return (self.pos, self.has_diamond, self.guard_phase)
-        return (self.pos, self.has_diamond)
+        if not self.guard_routes:
+            return (self.pos, self.has_diamond)
+        if self.alarm_enabled:
+            if self.alarmed:
+                return (self.pos, self.has_diamond, 1, tuple(self.guard_cells))
+            return (self.pos, self.has_diamond, 0, self.guard_phase)
+        return (self.pos, self.has_diamond, self.guard_phase)
 
     def reset(self):
         self.pos = self.start
         self.has_diamond = 0
         self.guard_phase = 0
-        self.alarm_timer = 0
+        self.alarmed = False
+        self.guard_cells = self._patrol_positions(0)
         self.steps = 0
         return self._state()
 
@@ -382,8 +427,8 @@ class MuseumEnv:
         alarm_triggered = False
         if camera:
             reward += self.r_camera
-            if self.alarm_enabled and self.alarm_timer == 0:
-                self.alarm_timer = self.ALARM_DURATION
+            if self.alarm_enabled and not self.alarmed:
+                self.alarmed = True         # rest-of-episode manhunt
                 alarm_triggered = True
         elif trap:
             reward += self.r_trap
@@ -398,18 +443,23 @@ class MuseumEnv:
                 reward += self.r_exit_early
                 ncell = self.pos
 
-        speed = self._guard_speed()
-        old_guards = set(self.guard_positions())
-        for _ in range(speed):
-            self.guard_phase = (self.guard_phase + 1) % self.guard_period
-        new_guards = set(self.guard_positions())
+        old_guards = list(self.guard_cells)
         caught = False
-        if not success and (ncell in old_guards or ncell in new_guards):
+        if self.alarmed:
+            # alarm raised: every guard abandons its patrol and hunts the robber
+            self.guard_cells = [self._chase_step(gc, ncell) for gc in old_guards]
+            if not success:
+                caught = any(g == ncell for g in self.guard_cells) or any(
+                    gn == self.pos and go == ncell        # crossed paths
+                    for go, gn in zip(old_guards, self.guard_cells))
+        else:
+            self.guard_phase = (self.guard_phase + 1) % self.guard_period
+            self.guard_cells = self._patrol_positions(self.guard_phase)
+            if not success and (ncell in set(old_guards)
+                                or ncell in set(self.guard_cells)):
+                caught = True
+        if caught:
             reward += self.r_guard
-            caught = True
-
-        if self.alarm_timer > 0:
-            self.alarm_timer -= 1
 
         self.pos = ncell
         self.steps += 1
@@ -421,7 +471,7 @@ class MuseumEnv:
             "trap": trap,
             "caught": caught,
             "success": success,
-            "alarm": self.alarm_timer > 0,
+            "alarm": self.alarmed,
             "alarm_triggered": alarm_triggered,
         }
         return self._state(), reward, done, info
@@ -431,5 +481,5 @@ class MuseumEnv:
             "pos": self.pos,
             "has_diamond": self.has_diamond,
             "guards": self.guard_positions(),
-            "alarm": self.alarm_timer > 0,
+            "alarm": self.alarmed,
         }

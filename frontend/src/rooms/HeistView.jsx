@@ -14,8 +14,8 @@ export default function HeistView({ room }) {
       ]}
       tips={[
         'SARSA is on-policy: it learns the value of the ε-greedy policy it actually follows, so it naturally keeps a safety margin around cameras and guards.',
-        'The alarm doubles guard speed for 5 turns — one careless camera step changes the whole endgame.',
-        'The state includes the guard patrol phase: timing matters, not just position.',
+        'One camera sighting raises a permanent ALARM — the guards abandon their patrols and chase you for the rest of the heist.',
+        'Before the alarm the state tracks the guard patrol phase; once alarmed it must track the guards’ actual positions — watch the state space explode.',
         'Compare with Room 3: Q-Learning would hug danger more tightly than cautious SARSA.',
       ]} />
   );

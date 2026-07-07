@@ -21,7 +21,7 @@
   position: relative;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: linear-gradient(180deg, #121a38, #0c1226);
+  background: var(--card-bg);
   overflow: hidden;
   color: var(--text);
   display: flex;
@@ -31,7 +31,7 @@
 .room-card:hover {
   transform: translateY(-5px);
   border-color: var(--accent);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5), 0 0 30px var(--accent-soft);
+  box-shadow: var(--card-shadow), 0 0 30px var(--accent-soft);
 }
 .room-card .card-scene {
   position: relative;
@@ -39,7 +39,7 @@
   border-bottom: 1px solid var(--line);
   background:
     radial-gradient(320px 130px at 50% 115%, var(--accent-soft), transparent 70%),
-    linear-gradient(180deg, #0d1430, #0a0f22);
+    var(--scene-bg);
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -66,7 +66,7 @@
   font-family: var(--font-display);
   font-size: 34px;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.06);
+  color: var(--ghost-num);
 }
 .room-card .training-tag {
   position: absolute;
@@ -102,7 +102,7 @@
   margin-top: 2px;
 }
 .room-stat {
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--chip-bg);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 6px 8px;
@@ -128,7 +128,7 @@
 .card-actions .btn { flex: 1; justify-content: center; padding: 8px 6px; font-size: 10.5px; }
 
 .difficulty { color: var(--accent); letter-spacing: 3px; font-size: 12px; }
-.difficulty .off { color: rgba(255, 255, 255, 0.14); }
+.difficulty .off { color: var(--diff-off); }
 
 /* ---------- room page header ---------- */
 .room-header {
@@ -162,7 +162,7 @@
   grid-template-columns: 118px 1fr;
   gap: 12px;
   padding: 9px 0;
-  border-bottom: 1px dashed rgba(44, 55, 104, 0.5);
+  border-bottom: 1px dashed var(--dash-line);
   font-size: 13px;
 }
 .spec-row .k {

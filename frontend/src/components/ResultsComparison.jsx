@@ -4,15 +4,17 @@ import {
   Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 
-const ROOM_COLORS = ['#ffd23f', '#a78bfa', '#ff4d5a', '#34d399', '#38bdf8'];
-const AXIS = { stroke: '#39456e', fontSize: 10, tickLine: false };
-const GRID = { stroke: '#182042', strokeDasharray: '3 6' };
+// theme-aware via CSS variables (resolved live, so the toggle re-skins charts)
+const ROOM_COLORS = ['var(--gold)', 'var(--purple)', 'var(--red)', 'var(--green)', 'var(--sky)'];
+const AXIS = { stroke: 'var(--chart-axis)', fontSize: 10, tickLine: false };
+const GRID = { stroke: 'var(--chart-grid)', strokeDasharray: '3 6' };
 const TOOLTIP = {
   contentStyle: {
-    background: '#0c1226', border: '1px solid #2c3768', borderRadius: 8,
+    background: 'var(--tooltip-bg)', border: '1px solid var(--line-bright)',
+    borderRadius: 8, color: 'var(--text)',
     fontFamily: '"JetBrains Mono", monospace', fontSize: 12,
   },
-  labelStyle: { color: '#7e88ab' },
+  labelStyle: { color: 'var(--muted)' },
 };
 
 function fmt(x, digits = 0) {
@@ -77,7 +79,7 @@ export default function ResultsComparison({ rooms }) {
               <CartesianGrid {...GRID} />
               <XAxis dataKey="name" {...AXIS} />
               <YAxis {...AXIS} width={50} domain={[0, 100]} />
-              <Tooltip {...TOOLTIP} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+              <Tooltip {...TOOLTIP} cursor={{ fill: 'var(--chart-cursor)' }} />
               <Bar dataKey="success" radius={[4, 4, 0, 0]} isAnimationActive={false}>
                 {chartRows.map((r) => <Cell key={r.name} fill={r.color} />)}
               </Bar>
@@ -91,7 +93,7 @@ export default function ResultsComparison({ rooms }) {
               <CartesianGrid {...GRID} />
               <XAxis dataKey="name" {...AXIS} />
               <YAxis {...AXIS} width={50} />
-              <Tooltip {...TOOLTIP} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+              <Tooltip {...TOOLTIP} cursor={{ fill: 'var(--chart-cursor)' }} />
               <Bar dataKey="best" radius={[4, 4, 0, 0]} isAnimationActive={false}>
                 {chartRows.map((r) => <Cell key={r.name} fill={r.color} />)}
               </Bar>

@@ -8,9 +8,15 @@ frontend (and the grader) can inspect plain JSON files:
     results/models/room{N}_*.pkl|.pt    trained Q-tables / networks
     results/policies/room{N}.json       value heatmap + policy arrows
     results/configs/room{N}.json        saved hyperparameter overrides
+
+Training artefacts are *session-scoped*: :func:`reset_results` wipes
+everything except the saved hyperparameter configs when the server
+shuts down (and again on startup, in case the previous run crashed),
+so every launch begins with five untrained rooms.
 """
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +33,13 @@ def ensure_dirs() -> None:
     for d in (RESULTS_DIR, METRICS_DIR, REPLAYS_DIR, MODELS_DIR,
               POLICIES_DIR, CONFIGS_DIR):
         d.mkdir(parents=True, exist_ok=True)
+
+
+def reset_results() -> None:
+    """Delete all training artefacts (keeps hyperparameter configs)."""
+    for d in (METRICS_DIR, REPLAYS_DIR, MODELS_DIR, POLICIES_DIR):
+        shutil.rmtree(d, ignore_errors=True)
+    ensure_dirs()
 
 
 def metrics_path(room_id: int) -> Path:

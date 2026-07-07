@@ -1,8 +1,9 @@
+# Backend dependencies — Python 3.10+ (64-bit; PyTorch has no wheels for
+# 32-bit or MSYS2/MinGW Python). Install into a venv:
+#   python -m venv .venv
+#   .venv\Scripts\python -m pip install -r requirements.txt     (Windows)
+#   .venv/bin/python -m pip install -r requirements.txt         (macOS/Linux)
 numpy>=1.26
-streamlit>=1.36
-matplotlib>=3.8
-plotly>=5.20
-pandas>=2.2
 torch>=2.4
 fastapi>=0.110
 uvicorn>=0.29

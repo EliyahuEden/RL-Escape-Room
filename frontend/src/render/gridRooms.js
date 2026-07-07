@@ -565,24 +565,24 @@ export function renderRacing(ctx, W, H, scene) {
   const walls = new Set((layout.walls || []).map(key));
 
   // asphalt
-  ctx.fillStyle = '#0a0c12';
+  ctx.fillStyle = '#101116';
   ctx.fillRect(0, 0, W, H);
   for (let r = 0; r < N; r++) {
     for (let c = 0; c < N; c++) {
       if (walls.has(`${r},${c}`)) continue;
       const [x, y] = g.tile(r, c);
       const n = hash2(r, c);
-      ctx.fillStyle = n > 0.5 ? '#15181f' : '#131620';
+      ctx.fillStyle = n > 0.5 ? '#17181e' : '#141519';
       ctx.fillRect(x, y, g.cell, g.cell);
-      // asphalt speckle
+      // asphalt speckle + tyre rubber
       ctx.fillStyle = 'rgba(255,255,255,0.028)';
       ctx.fillRect(x + n * g.cell * 0.8, y + hash2(c, r) * g.cell * 0.8, 1.6, 1.6);
     }
   }
 
-  // subtle lane dashes on long open runs
+  // white lane lines on long straights
   ctx.save();
-  ctx.strokeStyle = 'rgba(255,210,80,0.10)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
   ctx.setLineDash([g.cell * 0.28, g.cell * 0.28]);
   ctx.lineWidth = 1.6;
   for (let r = 0; r < N; r++) {
@@ -602,26 +602,35 @@ export function renderRacing(ctx, W, H, scene) {
   }
   ctx.restore();
 
-  // city blocks (buildings with lit windows)
+  // grass infield blocks with red/white F1 kerbs facing the track
+  const isTrack = (rr, cc) => rr >= 0 && rr < N && cc >= 0 && cc < N
+    && !walls.has(`${rr},${cc}`);
+  const kerb = (kx, ky, kw, kh, horizontal) => {
+    const seg = Math.max(5, g.cell / 8);
+    const len = horizontal ? kw : kh;
+    for (let i = 0; i * seg < len; i++) {
+      ctx.fillStyle = i % 2 === 0 ? '#d21b2d' : '#f3f4f6';
+      const s = Math.min(seg, len - i * seg);
+      if (horizontal) ctx.fillRect(kx + i * seg, ky, s, kh);
+      else ctx.fillRect(kx, ky + i * seg, kw, s);
+    }
+  };
   (layout.walls || []).forEach(([r, c]) => {
     const [x, y] = g.tile(r, c);
     ctx.save();
-    ctx.fillStyle = '#1b2030';
-    roundRect(ctx, x + 1, y + 1, g.cell - 2, g.cell - 2, 3);
-    ctx.fill();
-    ctx.fillStyle = '#242b40';
-    roundRect(ctx, x + 3, y + 3, g.cell - 6, g.cell - 6, 2);
-    ctx.fill();
-    // windows — some lit, twinkling slowly
-    for (let wr = 0; wr < 3; wr++) {
-      for (let wc = 0; wc < 3; wc++) {
-        const nn = hash2(r * 9 + wr, c * 9 + wc);
-        const lit = nn > 0.55 && Math.sin(timeMs / 2400 + nn * 20) > -0.6;
-        ctx.fillStyle = lit ? 'rgba(255,205,110,0.75)' : 'rgba(10,12,20,0.9)';
-        ctx.fillRect(x + 6 + wc * (g.cell - 13) / 3, y + 6 + wr * (g.cell - 13) / 3,
-                     (g.cell - 16) / 3, (g.cell - 16) / 3);
-      }
-    }
+    // mowed grass
+    ctx.fillStyle = (r + c) % 2 === 0 ? '#0d3d20' : '#0b361c';
+    ctx.fillRect(x, y, g.cell, g.cell);
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = '#0f4525';
+    ctx.fillRect(x, y + g.cell * 0.5 * hash2(r, c), g.cell, g.cell * 0.22);
+    ctx.globalAlpha = 1;
+    // kerbs on every edge that touches tarmac
+    const kt = Math.max(3, g.cell * 0.08);
+    if (isTrack(r - 1, c)) kerb(x, y, g.cell, kt, true);
+    if (isTrack(r + 1, c)) kerb(x, y + g.cell - kt, g.cell, kt, true);
+    if (isTrack(r, c - 1)) kerb(x, y, kt, g.cell, false);
+    if (isTrack(r, c + 1)) kerb(x + g.cell - kt, y, kt, g.cell, false);
     ctx.restore();
   });
 
@@ -643,66 +652,86 @@ export function renderRacing(ctx, W, H, scene) {
     ctx.restore();
   });
 
-  // mud
+  // gravel traps
   (layout.mud || []).forEach(([r, c]) => {
     const [x, y] = g.tile(r, c);
     ctx.save();
-    ctx.fillStyle = 'rgba(101,67,33,0.55)';
-    for (let i = 0; i < 4; i++) {
-      const nn = hash2(r + i, c * 2 + i);
+    ctx.fillStyle = 'rgba(190,160,110,0.20)';
+    ctx.fillRect(x + 1.5, y + 1.5, g.cell - 3, g.cell - 3);
+    ctx.fillStyle = 'rgba(214,186,130,0.55)';
+    for (let i = 0; i < 16; i++) {
+      const n1 = hash2(r * 7 + i, c * 5 + i);
+      const n2 = hash2(c * 9 + i, r * 3 + i);
       ctx.beginPath();
-      ctx.ellipse(x + g.cell * (0.25 + nn * 0.5), y + g.cell * (0.25 + hash2(c + i, r) * 0.5),
-                  g.cell * 0.16, g.cell * 0.11, nn * 3, 0, Math.PI * 2);
+      ctx.arc(x + 3 + n1 * (g.cell - 6), y + 3 + n2 * (g.cell - 6),
+              0.9 + n1 * 1.1, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
   });
 
-  // crash barriers
+  // crash barriers — stacked red/white TecPro blocks
   (layout.crash || []).forEach(([r, c]) => {
     const [x, y] = g.tile(r, c);
     ctx.save();
-    ctx.fillStyle = '#d97706';
-    roundRect(ctx, x + 2.5, y + g.cell * 0.28, g.cell - 5, g.cell * 0.44, 3);
-    ctx.fill();
-    ctx.beginPath();
-    roundRect(ctx, x + 2.5, y + g.cell * 0.28, g.cell - 5, g.cell * 0.44, 3);
-    ctx.clip();
-    ctx.fillStyle = '#fef3c7';
-    for (let i = -1; i < 4; i++) {
-      ctx.save();
-      ctx.translate(x + i * g.cell * 0.32, y + g.cell * 0.5);
-      ctx.rotate(-0.7);
-      ctx.fillRect(0, -g.cell * 0.4, g.cell * 0.14, g.cell * 0.8);
-      ctx.restore();
-    }
-    ctx.restore();
-    label(ctx, g.cx(c), y + g.cell * 0.2, '⚠', COL.amber, g.cell * 0.22);
-  });
-
-  // boosters (remaining from frame)
-  const boosters = f0 ? f0.b : layout.boosters;
-  (boosters || []).forEach(([r, c], i) => {
-    const x = g.cx(c);
-    const y = g.cy(r);
-    const p = 0.5 + 0.5 * Math.sin(timeMs / 260 + i * 1.3);
-    glow(ctx, x, y, g.cell * 0.6, 'rgba(56,189,248,0.8)', 0.3 + 0.2 * p);
-    ctx.save();
-    ctx.strokeStyle = COL.cyan;
-    ctx.lineWidth = 2.4;
-    ctx.shadowColor = COL.cyan;
-    ctx.shadowBlur = 8;
-    ctx.lineCap = 'round';
-    for (let k = 0; k < 2; k++) {
-      const off = (k - 0.5) * g.cell * 0.16 + ((timeMs / 240 + i) % 1) * g.cell * 0.1;
+    for (let i = 0; i < 2; i++) {
+      const by = y + g.cell * 0.22 + i * g.cell * 0.30;
+      ctx.fillStyle = i % 2 === 0 ? '#d21b2d' : '#f3f4f6';
+      roundRect(ctx, x + 2, by, g.cell - 4, g.cell * 0.26, 3);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(x - g.cell * 0.18, y + g.cell * 0.14 - off);
-      ctx.lineTo(x, y - g.cell * 0.06 - off);
-      ctx.lineTo(x + g.cell * 0.18, y + g.cell * 0.14 - off);
+      roundRect(ctx, x + 2, by, g.cell - 4, g.cell * 0.26, 3);
       ctx.stroke();
     }
     ctx.restore();
+    label(ctx, g.cx(c), y + g.cell * 0.17, '⚠', COL.amber, g.cell * 0.2);
   });
+
+  // checkpoint timing gates (blue = ahead, green ✓ = crossed)
+  const ncp = f0 ? (f0.ncp || 0) : 0;
+  (layout.checkpoints || []).forEach((gate, gi) => {
+    const passed = ncp > gi;
+    const active = ncp === gi;
+    gate.forEach(([r, c]) => {
+      const [x, y] = g.tile(r, c);
+      const base = passed ? COL.green : COL.cyan;
+      const puls = active ? 0.5 + 0.5 * Math.sin(timeMs / 210 + gi * 2) : 0.25;
+      ctx.save();
+      // light band across the cell
+      ctx.fillStyle = passed ? 'rgba(52,211,153,0.10)'
+        : `rgba(56,189,248,${0.10 + 0.12 * puls})`;
+      ctx.fillRect(x + g.cell * 0.3, y + 1.5, g.cell * 0.4, g.cell - 3);
+      // gate pylons top + bottom
+      ctx.fillStyle = base;
+      ctx.shadowColor = base;
+      ctx.shadowBlur = active ? 10 : 4;
+      ctx.fillRect(x + g.cell * 0.26, y + 1.5, g.cell * 0.48, 3.2);
+      ctx.fillRect(x + g.cell * 0.26, y + g.cell - 4.7, g.cell * 0.48, 3.2);
+      ctx.restore();
+      label(ctx, g.cx(c), g.cy(r) + 3.5, passed ? '✓' : `${gi + 1}`,
+        base, g.cell * 0.3);
+    });
+  });
+
+  // starting grid slot
+  {
+    const [sr, sc] = layout.start;
+    const [x, y] = g.tile(sr, sc);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+    ctx.lineWidth = 1.6;
+    for (const oy of [0.16, 0.56]) {
+      ctx.beginPath();
+      ctx.moveTo(x + g.cell * 0.72, y + g.cell * oy);
+      ctx.lineTo(x + g.cell * 0.28, y + g.cell * oy);
+      ctx.lineTo(x + g.cell * 0.28, y + g.cell * (oy + 0.28));
+      ctx.stroke();
+    }
+    ctx.restore();
+    label(ctx, g.cx(sc), y + g.cell * 0.12, 'GRID', 'rgba(255,255,255,0.5)', 7);
+  }
 
   // finish line — checkered, locked until enough boosters
   const open = f0 ? f0.open : false;
@@ -732,25 +761,31 @@ export function renderRacing(ctx, W, H, scene) {
     }
   }
 
-  // car with rotation + skid on slip
-  const toXY = (p) => [g.cx(p[1]), g.cy(p[0])];
-  drawTrail(ctx, trailPoints(frames, cursor, 8, toXY), g.cell * 0.22, 'rgba(255,120,90,0.8)');
-  const a = f0?.p ? lerpPos(f0.p, f1?.p, t) : null;
-  if (a) {
+  // cars: player (Q-Learning, red) + optional SARSA rival (violet, in races).
+  // In races each car keeps its own visual lane inside the cell, so they
+  // stay visible side by side on the grid and at the flag.
+  const racing = !!f0?.rv;
+  const laneOff = racing ? g.cell * 0.17 : 0;
+  const toXY = (p) => [g.cx(p[1]), g.cy(p[0]) + laneOff];
+  const toXYrv = (p) => [g.cx(p[1]), g.cy(p[0]) - laneOff];
+
+  const drawCar = (p0, p1, dy, body, ring, name, skid) => {
+    const a = p0 ? lerpPos(p0, p1, t) : null;
+    if (!a) return null;
     const x = g.cx(a[1]);
-    const y = g.cy(a[0]);
+    const y = g.cy(a[0]) + dy;
     let ang = 0; // canvas-space heading; sprite is drawn nose-up, +90° applied below
-    if (f0?.p && f1?.p && (f0.p[0] !== f1.p[0] || f0.p[1] !== f1.p[1])) {
-      ang = Math.atan2(f1.p[0] - f0.p[0], f1.p[1] - f0.p[1]);
+    if (p0 && p1 && (p0[0] !== p1[0] || p0[1] !== p1[1])) {
+      ang = Math.atan2(p1[0] - p0[0], p1[1] - p0[1]);
     }
     const carW = g.cell * 0.36;
     const carL = g.cell * 0.6;
-    glow(ctx, x, y, g.cell * 0.9, 'rgba(255,77,90,0.7)', 0.35);
+    glow(ctx, x, y, g.cell * 0.9, ring, 0.35);
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(ang + Math.PI / 2);
     // skid marks when slipping
-    if ((f0.ev || []).includes('slip')) {
+    if (skid) {
       ctx.strokeStyle = 'rgba(30,30,36,0.8)';
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -769,8 +804,8 @@ export function renderRacing(ctx, W, H, scene) {
       ctx.fill();
     }
     // body
-    ctx.fillStyle = COL.red;
-    ctx.shadowColor = COL.red;
+    ctx.fillStyle = body;
+    ctx.shadowColor = body;
     ctx.shadowBlur = 12;
     roundRect(ctx, -carW / 2, -carL / 2, carW, carL, carW * 0.32);
     ctx.fill();
@@ -784,8 +819,36 @@ export function renderRacing(ctx, W, H, scene) {
     ctx.fillRect(-carW * 0.32, -carL / 2 + 0.5, carW * 0.2, 2.4);
     ctx.fillRect(carW * 0.12, -carL / 2 + 0.5, carW * 0.2, 2.4);
     ctx.restore();
-    floatingReward(ctx, x, y, f0?.r, t);
+    if (name) label(ctx, x, y - g.cell * 0.52, name, ring, 8);
+    return [x, y];
+  };
+
+  if (racing) {
+    const rvPts = [];
+    const end = Math.floor(cursor);
+    for (let i = Math.max(0, end - 8); i < end; i++) {
+      const fr = frames[i];
+      if (fr && fr.rv) rvPts.push(toXYrv(fr.rv));
+    }
+    drawTrail(ctx, rvPts, g.cell * 0.18, 'rgba(167,139,250,0.6)');
+    drawCar(f0.rv, f1?.rv, -laneOff, '#7c5cd6', 'rgba(167,139,250,0.85)',
+      'SARSA', false);
   }
 
-  terminalFx(ctx, W, H, f0, t, timeMs, 'RACE WON!', { crash: 'CRASHED!' });
+  drawTrail(ctx, trailPoints(frames, cursor, 8, toXY), g.cell * 0.22, 'rgba(255,120,90,0.8)');
+  const carXY = drawCar(f0?.p, f1?.p, laneOff, COL.red, 'rgba(255,77,90,0.85)',
+    racing ? 'Q-LEARNING' : null, (f0?.ev || []).includes('slip'));
+  if (carXY) floatingReward(ctx, carXY[0], carXY[1], f0?.r, t);
+
+  // outcome — race verdicts take precedence over the plain finish banner
+  const ev = f0?.ev || [];
+  if (ev.includes('lost race')) {
+    fullFlash(ctx, W, H, COL.amber, Math.max(0, 0.14 - t * 0.12));
+    outcomeText(ctx, W, H, 'RIVAL WINS!', COL.amber, timeMs);
+  } else if (ev.includes('won race')) {
+    fullFlash(ctx, W, H, COL.green, Math.max(0, 0.18 - t * 0.16));
+    outcomeText(ctx, W, H, 'RACE WON!', COL.green, timeMs);
+  } else {
+    terminalFx(ctx, W, H, f0, t, timeMs, 'RACE WON!', { crash: 'CRASHED!' });
+  }
 }

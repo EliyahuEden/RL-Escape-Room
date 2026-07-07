@@ -40,6 +40,6 @@ export const api = {
 
 // events the replay viewer highlights in green
 export const GOOD_EVENTS = new Set([
-  'coin', 'diamond', 'boost', 'escaped', 'finished', 'goal', 'goal!',
-  'crossed', 'dodged', 'shooting zone', 'shortcut', 'success',
+  'coin', 'diamond', 'checkpoint', 'escaped', 'finished', 'goal', 'goal!',
+  'crossed', 'dodged', 'shooting zone', 'shortcut', 'success', 'won race',
 ]);
