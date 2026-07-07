@@ -41,42 +41,54 @@ from rl.envs.grid_base import ACTIONS, DOWN, GridBase, LEFT, RIGHT, UP, path_len
 Cell = Tuple[int, int]
 _DELTA = {UP: (-1, 0), DOWN: (1, 0), LEFT: (0, -1), RIGHT: (0, 1)}
 
-# '#'=off-track '.'=track 'S'=start 'F'=finish '1'/'2'/'3'=checkpoint gates
+# '#'=grass infield '.'=track 'S'=start 'F'=finish '1'/'2'/'3'=checkpoint gates
 # 'O'=oil 'M'=gravel trap 'X'=crash barrier 'R'=risky racing line marker
 
-# ── Street layout (structure: city blocks + the barrier line) ──────────────
+# ── Grand-Prix circuit (12×12) ──────────────────────────────────────────────
 #
-#   Rows 0-6: city grid.  Row 7: the open ring road (safe detour).
-#   Row 8: construction crash barriers (the "cliff").  Row 9: the express
-#   lane — the shortest line on the map, right along the barriers.
+#   A proper F1-style ribbon around a grass infield, centred in the grid with
+#   grass run-off top and bottom:
+#     * row 9 — the MAIN STRAIGHT (the express lane): S → F straight along a
+#       wall of TecPro crash barriers (row 8). Shortest line on the map, but
+#       one twitch up into the barriers ends the race — the "cliff".
+#     * cols 0 & 11 + the back straight (row 2) — the outer loop (the safe way
+#       round): longer, through the gravel run-off, nowhere near anything
+#       terminal — a SARSA rival prices the barrier risk in and takes it.
+#     * rows 2-3 — a CHICANE that kinks the back straight into the infield.
+#   Every gate sits on BOTH lines (one cell on the main straight, one on the
+#   outer loop) so there are two complete ways to drive from start to finish.
 #
 TRACK_BASE_LAYOUT = [
-    "..........",   # 0: north boulevard
-    ".##.##.##.",   # 1: city blocks
-    "..........",   # 2: cross street
-    ".##.##.##.",   # 3: city blocks
-    "..........",   # 4: mid boulevard
-    ".##.##.##.",   # 5: city blocks
-    "..........",   # 6: ring boulevard (the safe detour)
-    "..........",   # 7: buffer row — keeps the detour away from the cliff
-    "..XXXXXX..",   # 8: construction barriers — the cliff
-    "S........F",   # 9: express lane
+    "############",  # 0: grass run-off (top)
+    "############",  # 1
+    ".....##.....",  # 2: back straight, split by the chicane gap
+    ".###....###.",  # 3: chicane apex (dips into the infield)
+    ".##########.",  # 4: outer loop (cols 0 & 11) around the grass infield
+    ".##########.",  # 5
+    ".##########.",  # 6
+    ".##########.",  # 7
+    ".XXXXXXXXXX.",  # 8: crash barriers — the cliff (open ends = pit exits)
+    "S..........F",  # 9: main straight — the express lane
+    "############",  # 10: grass run-off (bottom)
+    "############",  # 11
 ]
 
-# ── Default layout (hand-placed items) ──────────────────────────────────────
-#    Each checkpoint gate has one cell on the ring road (row 6) and one on
-#    the express lane (row 9) at the same column — two ways to drive the lap.
+# ── Default layout (hand-placed gates + gravel) ─────────────────────────────
+#    Gate 1 / 2 each have a cell on the main straight (row 9) AND on the outer
+#    loop (row 2), so the express line and the safe loop both complete the lap.
 DEFAULT_LAYOUT = [
-    "..........",   # 0: north side
-    ".##.##.##.",   # 1: infield blocks
-    "..........",   # 2: cross link
-    ".##.##.##.",   # 3: infield blocks
-    "...O..O...",   # 4: oil punishes the deep-north alternative
-    ".##.##.##.",   # 5: infield blocks
-    "..M1.M.2..",   # 6: ring road — gravel traps + safe checkpoint cells
-    "..........",   # 7: buffer row (clean)
-    "..XXXXXX..",   # 8: crash barriers — the cliff
-    "SRR1RRR2RF",   # 9: express lane (R = racing line) + risky checkpoint cells
+    "############",  # 0: grass run-off (top)
+    "############",  # 1
+    "...1.##.2...",  # 2: back straight — safe checkpoint cells + chicane gap
+    ".###....###.",  # 3: chicane apex
+    ".##########M",  # 4: gravel run-off on the right-hand straight
+    ".##########.",  # 5
+    "M##########.",  # 6: gravel run-off on the left-hand straight
+    ".##########.",  # 7
+    ".XXXXXXXXXX.",  # 8: crash barriers — the cliff
+    "SRRR1RRR2RRF",  # 9: main straight (R = racing line) + risky checkpoints
+    "############",  # 10: grass run-off (bottom)
+    "############",  # 11
 ]
 
 
@@ -159,59 +171,68 @@ def racing_layout_stats(layout: List[str]) -> Dict[str, object]:
 
 def generate_racing_layout(
     seed: int = 0,
-    n_oil: int = 2,
+    n_oil: int = 0,
     n_mud: int = 2,
     n_gates: int = 2,
-    n_crash: int = 8,          # kept for signature compat; the barrier line is structural
+    n_crash: int = 10,         # kept for signature compat; the barrier line is structural
 ) -> List[str]:
-    """Generate a Grand Prix lap on the fixed cliff-track structure.
+    """Generate a Grand-Prix lap on the fixed F1-circuit structure.
 
-    The express lane / barrier line / ring road skeleton never changes —
+    The main straight / barrier line / outer loop skeleton never changes —
     that asymmetry IS the lesson — but every seed shuffles the checkpoint
-    gate columns, gravel traps and oil, so each map still plays
-    differently.  Each gate gets one express-lane cell and one ring-road
-    cell at the same column: two complete ways to drive the lap.
+    gate columns and gravel run-off, so each map still plays differently.
+    Each gate gets one main-straight cell and one outer-loop cell, so both
+    lines complete the lap.
     """
     rng = random.Random(seed)
     layout = [list(row) for row in TRACK_BASE_LAYOUT]
+    N = len(layout)              # 12
 
-    # racing line along the express lane
-    for c in range(1, 9):
-        layout[9][c] = "R"
+    # structural rows (derived, so this survives layout tweaks)
+    express_row = next(r for r, row in enumerate(TRACK_BASE_LAYOUT) if "S" in row)
+    back_row = next(r for r, row in enumerate(TRACK_BASE_LAYOUT)
+                    if "." in row[2:N - 2])   # topmost track straight
 
-    # checkpoint gates: gate 1 early-mid, gate 2 mid-late; both rows.
-    # (columns 3-7 keep every inter-gate value chain short enough for
-    # exploration along the cliff to actually learn it)
+    # racing line along the main straight
+    for c in range(1, N - 1):
+        if layout[express_row][c] == ".":
+            layout[express_row][c] = "R"
+
+    # checkpoint gates: gate 1 early, gate 2 late, well separated so each
+    # inter-gate chain along the cliff stays short enough to learn.
     g1 = rng.randint(3, 4)
-    g2 = rng.randint(6, 7)
-    gate_cols = [g1, g2][:max(1, n_gates)]
-    for gi, col in enumerate(gate_cols, start=1):
-        layout[9][col] = str(gi)
-        layout[6][col] = str(gi)
+    g2 = rng.randint(8, 9)
+    express_cols = [g1, g2][:max(1, n_gates)]
+    for gi, col in enumerate(express_cols, start=1):
+        layout[express_row][col] = str(gi)
 
-    # gravel traps on the ring road, avoiding the gate cells
-    trap_pool = [c for c in range(1, 9) if layout[6][c] == "."]
-    rng.shuffle(trap_pool)
-    for c in trap_pool[:max(0, n_mud)]:
-        layout[6][c] = "M"
+    # matching gate cells on the outer loop (back straight), same order
+    # left→right, skipping the chicane gap in the middle of the back straight
+    ring_cols = [rng.choice([2, 3]), rng.choice([8, 9])][:max(1, n_gates)]
+    for gi, col in enumerate(ring_cols, start=1):
+        if layout[back_row][col] == ".":
+            layout[back_row][col] = str(gi)
 
-    # oil only at open intersections where a slip deflects onto open road
-    # (row 4 mid boulevard, between street gaps — never beside a wall)
-    oil_spots = [(4, c) for c in (3, 6)
-                 if layout[3][c] == "." and layout[5][c] == "."]
-    for cell in rng.sample(oil_spots, k=min(n_oil, len(oil_spots))):
-        _put(layout, cell, "O")
+    # gravel run-off on the two vertical straights (cols 0 and N-1)
+    placed = 0
+    for c in (0, N - 1):
+        if placed >= n_mud:
+            break
+        r = rng.randint(back_row + 2, express_row - 1)
+        if layout[r][c] == ".":
+            layout[r][c] = "M"
+            placed += 1
 
     result = ["".join(row) for row in layout]
 
-    # sanity: express lane must be the unique 9-step line; a crash-free
-    # detour must exist and be meaningfully longer
+    # sanity: a crash-free outer loop must exist and be meaningfully longer
+    # than the straight-line main straight; otherwise fall back to the default
     parsed = _parse_layout(result)
     blocked = parsed["walls"] | parsed["crash"]
-    express = path_length(shortest_path(blocked, parsed["start"], parsed["finish"], 10, 10))
-    safe = path_length(shortest_path(blocked, parsed["start"], parsed["finish"], 10, 10,
+    express = path_length(shortest_path(blocked, parsed["start"], parsed["finish"], N, N))
+    safe = path_length(shortest_path(blocked, parsed["start"], parsed["finish"], N, N,
                                      extra_blocked=parsed["shortcut"] | parsed["oil"]))
-    if express != 9 or safe is None or safe < express + 3:
+    if express is None or safe is None or safe < express + 6:
         return [row[:] for row in DEFAULT_LAYOUT]
     return result
 

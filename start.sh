@@ -2,12 +2,14 @@
 # ============================================================
 #  RL Escape Room - one-command launcher (macOS / Linux)
 #
-#    ./start.sh        first run: sets up everything (Python venv,
-#                      pip packages, npm packages, frontend build),
-#                      then runs the app on http://localhost:8000
-#    ./start.sh dev    developer mode: backend (8000) + Vite
-#                      hot-reload frontend (5173)
-#    ./start.sh build  rebuild the frontend bundle, then run
+#    ./start.sh        developer mode (DEFAULT): backend (8000) + Vite
+#                      hot-reload frontend (5173). Every source edit shows
+#                      up instantly - no rebuild needed. First run also sets
+#                      up the Python venv + npm packages.
+#    ./start.sh prod   single-server production mode on http://localhost:8000
+#                      (rebuilds the frontend bundle first if it's missing)
+#    ./start.sh dev    same as running ./start.sh with no arguments
+#    ./start.sh build  force-rebuild the frontend bundle, then run (port 8000)
 #
 #  Prerequisites: Python 3.10+ and Node.js 18+
 # ============================================================
@@ -33,9 +35,10 @@ if [ ! -d frontend/node_modules ]; then
   (cd frontend && npm install --no-audit --no-fund)
 fi
 
-# ---------- developer mode ----------
-if [ "$1" = "dev" ]; then
+# ---------- developer hot-reload mode (default, or `dev`) ----------
+if [ -z "$1" ] || [ "$1" = "dev" ]; then
   echo "[start.sh] Developer mode: backend on 8000, Vite dev server on 5173."
+  echo "[start.sh] Open http://localhost:5173 - edits update automatically."
   $PY -m backend.api.main &
   BACKEND_PID=$!
   trap "kill $BACKEND_PID 2>/dev/null" EXIT
@@ -43,12 +46,12 @@ if [ "$1" = "dev" ]; then
   exit 0
 fi
 
-# ---------- 4. Frontend build ----------
+# ---------- production single-server build (prod / build) ----------
 if [ "$1" = "build" ] || [ ! -f frontend/dist/index.html ]; then
   echo "[start.sh] Building the frontend..."
   (cd frontend && npm run build)
 fi
 
-# ---------- 5. Run (single server: site + API on port 8000) ----------
+# ---------- Run (single server: site + API on port 8000) ----------
 echo "[start.sh] Starting RL Escape Room on http://localhost:8000 (Ctrl+C to stop)"
 $PY -m backend.api.main

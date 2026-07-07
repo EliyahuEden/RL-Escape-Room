@@ -53,11 +53,11 @@ def _p(key, label, type_, default, minv=None, maxv=None, step=None,
 
 
 def _td_params(episodes=800, max_steps=200, eps_end=0.05, eps_end_help="",
-               alpha=0.1):
+               alpha=0.1, gamma=0.95):
     return [
         _p("alpha", "Learning rate α", "float", alpha, 0.01, 1.0, 0.01,
            help_="How strongly each TD error updates Q(s,a)."),
-        _p("gamma", "Discount γ", "float", 0.95, 0.5, 0.999, 0.005,
+        _p("gamma", "Discount γ", "float", gamma, 0.5, 0.999, 0.005,
            help_="How much future reward matters."),
         _p("eps_start", "Initial ε", "float", 1.0, 0.0, 1.0, 0.05,
            help_="Starting exploration rate."),
@@ -69,15 +69,17 @@ def _td_params(episodes=800, max_steps=200, eps_end=0.05, eps_end_help="",
     ]
 
 
-def _dqn_params(episodes=400, max_steps=300, max_steps_rng=(60, 800)):
+def _dqn_params(episodes=400, max_steps=300, max_steps_rng=(60, 800),
+                lr=0.001, gamma=0.99, exploration_fraction=0.5, batch_size=64):
     return [
-        _p("lr", "Learning rate", "float", 0.001, 0.0001, 0.01, 0.0001),
-        _p("gamma", "Discount γ", "float", 0.99, 0.8, 0.999, 0.005),
+        _p("lr", "Learning rate", "float", lr, 0.0001, 0.01, 0.0001),
+        _p("gamma", "Discount γ", "float", gamma, 0.8, 0.999, 0.005),
         _p("eps_start", "Initial ε", "float", 1.0, 0.0, 1.0, 0.05),
         _p("eps_end", "Minimum ε", "float", 0.05, 0.0, 0.3, 0.01),
-        _p("exploration_fraction", "Exploration fraction", "float", 0.5, 0.1, 1.0, 0.05,
+        _p("exploration_fraction", "Exploration fraction", "float", exploration_fraction,
+           0.1, 1.0, 0.05,
            help_="Fraction of training over which ε decays to its minimum."),
-        _p("batch_size", "Batch size", "int", 64, 16, 256, 16),
+        _p("batch_size", "Batch size", "int", batch_size, 16, 256, 16),
         _p("buffer_size", "Replay buffer size", "int", 50000, 5000, 200000, 5000),
         _p("target_update", "Target net update (steps)", "int", 500, 50, 5000, 50),
         _p("episodes", "Episodes", "int", episodes, 100, 2500, 50),
@@ -214,7 +216,14 @@ ROOMS: dict[int, dict] = {
             _p("mode", "Game mode", "select", "match",
                options=["match", "freekick"],
                help_="match = dribble + shoot. freekick = 3D set piece over a wall."),
-        ] + _dqn_params(episodes=400, max_steps=120, max_steps_rng=(60, 300)) + [
+            _p("kick_spot", "Free-kick spot", "select", "center",
+               options=["center", "left", "right", "near", "far", "random"],
+               help_="Where the free kick is taken from (free-kick mode only). "
+                     "'random' varies the spot every episode to train one policy "
+                     "that can score from anywhere."),
+        ] + _dqn_params(episodes=800, max_steps=160, max_steps_rng=(60, 300),
+                        lr=0.0005, gamma=0.98, exploration_fraction=0.65,
+                        batch_size=128) + [
             _p("n_defenders", "Defenders / wall size", "int", 3, 1, 5, 1),
             _p("keeper_speed", "Keeper patrol speed (m/s)", "float", 1.5, 0.5, 4.0, 0.25),
             _SEED,
@@ -237,7 +246,7 @@ ROOMS: dict[int, dict] = {
             "learn when to dash, dodge or wait. Trained policies can be "
             "tested on brand-new traffic patterns."),
         "state": "x, y, Vx, Vy, goal direction + 6 sensor slots × 4 features",
-        "actions": "5 — Up / Down / Left / Right / Stay",
+        "actions": "9 — 8 directions (incl. diagonals) + Stay",
         "rewards": "cross +250 · collision −140 · off-road −40 · near-miss penalty · progress shaping",
         "params": _dqn_params(episodes=600, max_steps=350, max_steps_rng=(120, 800)) + [
             _p("n_cars", "Number of cars", "int", 14, 4, 24, 1),
@@ -316,7 +325,9 @@ def make_env(room_id: int, params: dict):
     if room_id == 4:
         if params.get("mode") == "freekick":
             return FreeKickEnv(n_wall=params["n_defenders"],
-                               keeper_speed=params["keeper_speed"], seed=seed)
+                               keeper_speed=params["keeper_speed"],
+                               kick_spot=params.get("kick_spot", "center"),
+                               seed=seed)
         return FootballEnv(n_defenders=params["n_defenders"],
                            keeper_speed=params["keeper_speed"],
                            max_steps=params["max_steps"], seed=seed)
@@ -650,22 +661,30 @@ def train_td(room_id: int, params: dict, progress=None, stop=None) -> dict:
             if stop is not None and stop.is_set():
                 raise StopRequested()
 
-        def greedy_finishes(Qtable) -> bool:
-            """Slip-free greedy rollout — a competent rival must finish."""
+        def takes_safe_route(Qtable) -> bool:
+            """Slip-free greedy rollout — the SARSA rival must not only FINISH
+            but do it via the SAFE detour (up and around the barriers). That
+            contrast — off-policy Q hugging the cliff, on-policy SARSA going the
+            long way — is the whole point of the room, so if this seed's rival
+            just learned the express we reject it and try another seed."""
             probe = make_env(3, params)
             probe.grid.slip_prob = 0.0
+            barrier_row = min((r for r, _ in probe.crash), default=probe.rows)
             s, done, steps, pinfo = probe.reset(), False, 0, {}
+            detoured = False
             while not done and steps < params["max_steps"]:
                 q = Qtable.get(s)
                 s, _, done, pinfo = probe.step(
                     int(np.argmax(q)) if q is not None else 0)
                 steps += 1
-            return bool(pinfo.get("success"))
+                if probe.pos[0] < barrier_row:   # climbed above the barriers
+                    detoured = True
+            return bool(pinfo.get("success")) and detoured
 
         try:
-            # SARSA's greedy trace can occasionally loop between near-tie
-            # cells; retry a couple of seeds so the race gets a real rival
-            for attempt in range(3):
+            # SARSA's greedy trace varies with the seed; retry a few until one
+            # both finishes AND takes the safe detour (the intended contrast)
+            for attempt in range(6):
                 rival_result = td_core.train(
                     make_env(3, params), algo="sarsa",
                     episodes=params["episodes"], alpha=params["alpha"],
@@ -675,7 +694,7 @@ def train_td(room_id: int, params: dict, progress=None, stop=None) -> dict:
                     seed=params["seed"] + 1 + attempt,
                     progress_cb=rival_cb, record_replays=False,
                     snapshot_fracs=())
-                if rival_result.policy and greedy_finishes(rival_result.policy):
+                if rival_result.policy and takes_safe_route(rival_result.policy):
                     break
         except StopRequested:
             stopped = True
@@ -800,8 +819,10 @@ def train_dqn_room(room_id: int, params: dict, progress=None, stop=None) -> dict
                 q = model(torch.as_tensor(obs, dtype=torch.float32))
                 return int(torch.argmax(q).item())
 
+        # 20 greedy episodes (not 10) so the reported success rate is a stable
+        # estimate — with ~70-100% policies a 10-episode sample swings wildly.
         eval_summary = run_greedy_eval(room_id, env, act, recorder,
-                                       max_steps, n=10)
+                                       max_steps, n=20)
         torch.save({"state_dict": model.state_dict(),
                     "obs_dim": env.obs_dim, "n_actions": env.n_actions,
                     "hidden": [128, 128]}, model_path(room_id, "pt"))

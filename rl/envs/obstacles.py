@@ -24,8 +24,13 @@ from typing import List, Optional
 
 import numpy as np
 
-UP, DOWN, LEFT, RIGHT, STAY = range(5)
-_VEL = {UP: (0, 1), DOWN: (0, -1), LEFT: (-1, 0), RIGHT: (1, 0), STAY: (0, 0)}
+UP, DOWN, LEFT, RIGHT, STAY, UP_LEFT, UP_RIGHT, DOWN_LEFT, DOWN_RIGHT = range(9)
+_D = 1.0 / math.sqrt(2.0)  # diagonals are unit-normalised so they aren't faster
+_VEL = {
+    UP: (0.0, 1.0), DOWN: (0.0, -1.0), LEFT: (-1.0, 0.0), RIGHT: (1.0, 0.0),
+    STAY: (0.0, 0.0),
+    UP_LEFT: (-_D, _D), UP_RIGHT: (_D, _D), DOWN_LEFT: (-_D, -_D), DOWN_RIGHT: (_D, -_D),
+}
 
 
 @dataclass
@@ -97,7 +102,7 @@ class ObstacleEnv:
         self.wrap_margin = max(1.0, self.car_height)
         self.lane_xs: List[float] = []
 
-        self.n_actions = 5
+        self.n_actions = 9  # 4 orthogonal + 4 diagonal moves + Stay
         self.obs_dim = 6 + 4 * self.max_sensed
         self._diag = math.hypot(self.W, self.H)
         self.cars: List[Car] = []

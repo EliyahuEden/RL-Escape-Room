@@ -2,13 +2,14 @@
 rem ============================================================
 rem  RL Escape Room - one-click launcher
 rem
-rem    start.bat        first run: sets up EVERYTHING (Python venv,
-rem                     pip packages, npm packages, frontend build),
-rem                     then runs the app on http://localhost:8000.
-rem                     Later runs: starts the app directly.
-rem    start.bat dev    developer mode: backend (8000) + Vite
-rem                     hot-reload frontend (5173) in two windows
-rem    start.bat build  rebuild the frontend bundle, then run
+rem    start.bat        developer mode (DEFAULT): backend (8000) + Vite
+rem                     hot-reload frontend (5173) in two windows. Every
+rem                     source edit shows up instantly - no rebuild needed.
+rem                     First run also sets up the Python venv + npm packages.
+rem    start.bat prod   single-server production mode on http://localhost:8000
+rem                     (rebuilds the frontend bundle first if it's missing).
+rem    start.bat dev    same as running start.bat with no arguments
+rem    start.bat build  force-rebuild the frontend bundle, then run (port 8000)
 rem
 rem  Prerequisites (install once, from the official sites):
 rem    * Python 3.10+  (64-bit)  https://python.org
@@ -49,6 +50,12 @@ exit /b 1
 :deps_ok
 if "%1"=="dev" goto dev
 if "%1"=="build" goto build
+if "%1"=="prod" goto prod
+rem no argument -> developer hot-reload mode (edits update automatically)
+goto dev
+
+rem ---------- production single-server mode (start.bat prod) ----------
+:prod
 if not exist "frontend\dist\index.html" goto build
 goto run
 

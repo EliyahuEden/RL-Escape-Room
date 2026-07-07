@@ -281,7 +281,8 @@ FREEKICK_ACTIONS = [f"{aim} {power} {curve}"
                     for aim in ("low", "mid", "high")
                     for power in ("soft", "hard")
                     for curve in ("curve-L", "straight", "curve-R")]
-CROSSROAD_ACTIONS = ["Up", "Down", "Left", "Right", "Stay"]
+CROSSROAD_ACTIONS = ["Up", "Down", "Left", "Right", "Stay",
+                     "Up-Left", "Up-Right", "Down-Left", "Down-Right"]
 
 
 def action_names(room_id: int, mode: Optional[str] = None) -> List[str]:

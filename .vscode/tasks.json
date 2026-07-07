@@ -1,0 +1,28 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run RL Escape Room (hot-reload)",
+      "type": "shell",
+      "windows": { "command": "${workspaceFolder}\\start.bat" },
+      "linux":   { "command": "${workspaceFolder}/start.sh" },
+      "osx":     { "command": "${workspaceFolder}/start.sh" },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "Run RL Escape Room (production, port 8000)",
+      "type": "shell",
+      "windows": { "command": "${workspaceFolder}\\start.bat", "args": ["prod"] },
+      "linux":   { "command": "${workspaceFolder}/start.sh", "args": ["prod"] },
+      "osx":     { "command": "${workspaceFolder}/start.sh", "args": ["prod"] },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    }
+  ]
+}

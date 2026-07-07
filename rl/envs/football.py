@@ -327,6 +327,18 @@ _FK_AIMS = ("low", "mid", "high")
 _FK_POWERS = ("soft", "hard")
 _FK_CURVES = ("left", "straight", "right")
 
+# Free-kick spots (kick_x, kick_y). The named spots are fixed drills; "random"
+# picks a fresh spot inside _FK_RANDOM_ZONE every episode, so a policy can be
+# trained to score from anywhere (the kick spot is part of the observation).
+_FK_SPOTS = {
+    "center": (3.5, 5.0),
+    "left":   (3.5, 3.8),
+    "right":  (3.5, 6.2),
+    "near":   (4.2, 5.0),
+    "far":    (2.4, 5.0),
+}
+_FK_RANDOM_ZONE = ((2.5, 4.2), (3.7, 6.3))  # (kick_x range, kick_y range)
+
 def _fk_action_table():
     table = {}
     idx = 0
@@ -341,9 +353,10 @@ _FK_ACTIONS = _fk_action_table()
 
 
 class FreeKickEnv:
-    """Free kick: the player stands at a fixed spot and kicks the ball toward
-    the goal.  A **wall** of defenders stands between the player and the goal,
-    and a keeper patrols the goal mouth.
+    """Free kick: the player stands at a chosen spot (``kick_spot`` — a fixed
+    drill position, or ``"random"`` for a fresh spot every episode) and kicks
+    the ball toward the goal.  A **wall** of defenders stands between the player
+    and the goal, and a keeper patrols the goal mouth.
 
     The ball has 3D physics: it travels in (x, y) on the pitch and also rises
     and falls in z (height).  High shots arc over the wall but are slower and
@@ -358,19 +371,20 @@ class FreeKickEnv:
     def __init__(
         self,
         n_wall: int = 3,
-        kick_x: float = 5.0,
+        kick_spot: str = "center",
+        kick_x: float = 3.5,
         kick_y: float = 5.0,
-        wall_x: float = 7.5,
+        wall_x: float = 6.1,
         keeper_speed: float = 1.5,
-        keeper_reach: float = 0.7,
+        keeper_reach: float = 0.6,
         soft_speed: float = 7.0,
         hard_speed: float = 13.0,
-        curve_acc: float = 14.0,
+        curve_acc: float = 22.0,
         max_flight_ticks: int = 250,
-        wall_height: float = 1.2,
+        wall_height: float = 1.0,
         wall_block_radius: float = 0.3,
         r_goal: float = 300.0,
-        r_save: float = 20.0,
+        r_save: float = -10.0,
         r_miss: float = -15.0,
         r_blocked: float = -30.0,
         r_post: float = -5.0,
@@ -385,11 +399,14 @@ class FreeKickEnv:
         self.k_lo = self.goal_lo + 0.3
         self.k_hi = self.goal_hi - 0.3
         self.n_wall = int(n_wall)
+        self.kick_spot = kick_spot
+        if kick_spot in _FK_SPOTS:              # named drill overrides x/y
+            kick_x, kick_y = _FK_SPOTS[kick_spot]
         self.kick_x_base = kick_x
         self.kick_y_base = kick_y
         self.kick_x = kick_x
         self.kick_y = kick_y
-        self.wall_x_offset = 2.0
+        self.wall_x_offset = 2.6
         self.wall_x = wall_x
         self.keeper_speed = keeper_speed
         self.keeper_reach = keeper_reach
@@ -425,9 +442,22 @@ class FreeKickEnv:
         return wall
 
     def reset(self):
+        # pick the spot to kick from: a fresh random one each episode, or the
+        # fixed drill position. The wall + obs follow the spot automatically.
+        if self.kick_spot == "random":
+            (xlo, xhi), (ylo, yhi) = _FK_RANDOM_ZONE
+            self.kick_x = self.rng.uniform(xlo, xhi)
+            self.kick_y = self.rng.uniform(ylo, yhi)
+        else:
+            self.kick_x = self.kick_x_base
+            self.kick_y = self.kick_y_base
         self.wall_x = self.kick_x + self.wall_x_offset
         self.wall_x = min(self.wall_x, self.W - 1.5)
-        self.keeper_y = self.goal_cy
+        # keeper starts anywhere along the goal mouth (not always centred), so
+        # the striker has to READ the keeper and pick the shot that beats it —
+        # a fixed action can no longer win every time.
+        self.keeper_y = (self.rng.uniform(self.k_lo, self.k_hi)
+                         if self.randomize else self.goal_cy)
         self.kdir = 1.0 if self.rng.random() < 0.5 else -1.0
         self.wall_players = self._spawn_wall()
         self.attempts = 0
@@ -449,7 +479,9 @@ class FreeKickEnv:
         speed = self.power[power_key]
         curve_sign = {"left": -1.0, "straight": 0.0, "right": 1.0}[curve_dir]
 
-        launch_angles = {"low": 5.0, "mid": 18.0, "high": 32.0}
+        # steeper launch angles + a lower wall (see wall_height) so a well-aimed
+        # loft actually clears the wall and still dips under the bar
+        launch_angles = {"low": 8.0, "mid": 28.0, "high": 46.0}
         angle_deg = launch_angles[aim]
         if self.randomize:
             angle_deg += self.rng.uniform(-2.0, 2.0)
