@@ -10,7 +10,7 @@ The canvas renderers in the frontend consume two things:
     common      t, a (action), r (step reward), cum, done, ev (events)
     pacman      p [r,c] · coins remaining · guard [r,c] · open (door)
     museum      p [r,c] · d (has diamond) · guards [[r,c]] · alarm
-    racing      p [r,c] · b (boosters remaining) · open (finish unlocked)
+    racing      p [r,c] · ncp (next checkpoint) · open (finish unlocked)
     football    p [x,y] · defs [[x,y]] · keeper [x,y] · shoot (in area)
                 (+ kick flights expanded into extra ball-flight frames)
     crossroad   p [x,y] · cars [[x,y]] (metadata lives in the layout)

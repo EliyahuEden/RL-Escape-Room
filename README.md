@@ -27,11 +27,15 @@ python.exe to PATH"*) and [Node.js 18+](https://nodejs.org). Everything else is 
 ### ▶ One click (Windows)
 
 Double-click **`start.bat`**. On the first run it sets up everything by itself — creates the
-Python venv, installs the Python packages (PyTorch is big, give it a few minutes), installs
-the frontend packages, builds the site — then starts the server and opens
-**http://localhost:8000**. Every later run starts in seconds.
+Python venv, installs the Python packages (PyTorch is big, give it a few minutes) and the
+frontend packages. It then launches in **developer mode** (backend + a hot-reload frontend on
+**http://localhost:5173**) so edits show up live.
 
-On macOS / Linux: `./start.sh` does the same.
+For the clean single-server production build instead, run **`start.bat prod`** — it builds the
+site and serves everything from **http://localhost:8000**. (`start.bat dev` = the default;
+`start.bat build` forces a fresh production build.)
+
+On macOS / Linux: `./start.sh` (dev) and `./start.sh prod` do the same.
 
 ### ▶ Or copy-paste (Windows PowerShell, from the project folder)
 
@@ -174,54 +178,92 @@ greedy evaluation episode — enough to *see* learning without gigabytes of JSON
   contain a camera/trap/patrol-free stealth route.
 
 ### Room 3 — Grand Prix · Q-Learning **vs a SARSA rival**
-* **The race** your Q-Learning car races a SARSA rival trained on the identical F1 circuit with
+* **The circuit** a proper F1-style ribbon on a **10×10 grid** — a grass infield ringed by the
+  track, red/white kerbs, a wall of TecPro crash barriers, a **chicane** on the back straight and
+  gravel run-off. Your Q-Learning car races a SARSA rival trained on the identical circuit with
   identical hyperparameters. The lap has **checkpoint gates** (cross 1, then 2, then the finish
-  opens) and every gate exists twice — once on each route — so both are full laps. The track is
-  *cliff walking* staged as a Grand Prix: the **express lane** (9 steps) hugs a wall of crash
-  barriers — safe when driven greedily, fatal to exploratory wobbles — while the **ring road**
-  detours safely through the gravel (≈15 steps).
+  opens) and every gate exists twice — once on each route — so both are full laps.
+* **The two lines** it's *cliff walking* staged as a Grand Prix: the **main straight** (9 steps)
+  runs S→F right along the barrier wall — safe when driven greedily, fatal to exploratory
+  wobbles — while the safe **outer loop** detours the long way round through the gravel (≈25
+  steps), nowhere near anything terminal.
 * **State** `(cell, next-checkpoint)` per car — each tracks its own lap progress.
 * **Rewards** step −1 · checkpoint +40 · finish +200 · crash −200 (terminal) · gravel −5 ·
   locked-finish bump −10 · off-track penalties. First car home wins the race.
 * **Why it works** Q-Learning's off-policy max-target ignores its own exploration accidents and
-  learns the barrier-hugging express lane; SARSA's on-policy target prices every ε-wobble into
-  the barriers and settles on the ring road. Same table, same settings — the race verdict *is*
-  the off-policy/on-policy distinction (minimum ε is kept at 0.15 so the distinction survives).
+  learns the barrier-hugging main straight; SARSA's on-policy target prices every ε-wobble into
+  the barriers and settles on the safe outer loop. Same table, same settings — the race verdict
+  *is* the off-policy/on-policy distinction (minimum ε is kept at 0.15 so it survives). The SARSA
+  rival's seed is chosen so it greedily completes the *safe* route, guaranteeing the contrast.
 * **Watch** the reward chart overlays both learning curves; eval replays show both cars racing
   side by side on their two routes with a 🏁 RACES WON score, and the loser finishes on camera.
 
 ### Room 4 — Football Striker · DQN
-* **State** continuous: `x, y, Vx, Vy`, keeper position + patrol direction, per-defender
-  relative vectors (10 + 3·defenders features).
-* **Actions** 15: 8 move directions + stay + 6 kicks (soft/hard × straight/curve-left/curve-right).
-  Free-kick mode: 18 one-shot kicks (3 aims × 2 powers × 3 curves) with 3D ball physics over a wall.
-* **Rewards** goal +300 · save −10 · miss −30 · tackled −50 · out-of-bounds −30 · progress
-  shaping toward the goal · step −0.3 · shot-clock timeout −25.
+A continuous 10×10 m pitch (`dt = 0.02 s`) with two modes:
+
+* **Match** — dribble past chasing defenders into the shooting zone, then shoot past a patrolling
+  keeper. **State** continuous `x, y, Vx, Vy`, keeper position + patrol direction, per-defender
+  relative vectors (10 + 3·defenders). **Actions** 15: 8 move directions + stay + 6 kicks
+  (soft/hard × straight/curve-L/curve-R). **Rewards** goal +300 · save −10 · miss −30 · tackled
+  −50 · out-of-bounds −30 · progress shaping · step −0.3 · shot-clock timeout −25.
+* **Free kick** — a **single kick** at goal, taken from a **truly random position every episode**
+  (any distance × any angle). The defensive **wall grows with proximity to goal** (2–5 players)
+  and is set **diagonally** on the ball→goal line — so a side free kick gets a wall angled between
+  the ball and the net, just like the real thing. The ball has 3D physics (rises/falls in z);
+  the striker must clear or curl around the wall *and* beat the keeper in one shot. **State**
+  keeper position + direction, kick spot, and up to 5 (padded) wall-player vectors — a fixed
+  length even though the wall size changes. **Actions** 18 one-shot kicks (3 aims × 2 powers × 3
+  curves). **Rewards** goal +300 · save/blocked/miss penalties.
 * **Why DQN** no table can cover a continuous state; an MLP (128×128) approximates Q(s,a) with
   experience replay + a target network.
 
 ### Room 5 — Cross the Road · DQN + sensors
 * **State** `x, y, Vx, Vy`, direction to goal, and **6 sensor slots** × (relative position,
   velocity, closeness) for the nearest cars in range — the agent never sees the whole map.
-* **Actions** Up / Down / Left / Right / Stay.
+* **Actions** 9: Up / Down / Left / Right / Stay **+ the 4 diagonals** (unit-normalised so a
+  diagonal dash is not faster than a straight one).
 * **Rewards** crossed +250 · collision −140 (terminal) · off-road −40 (terminal) · near-miss
   penalty · progress shaping.
-* **Generalisation** traffic can be re-randomised every episode, so the policy must react to
-  sensors instead of memorising a pattern.
+* **Generalisation** obstacle count and positions are dynamic and the traffic can be
+  re-randomised every episode, so the policy must react to sensors instead of memorising a
+  pattern — you can build a fresh random road after training and test the learned policy on it.
 
 ---
 
 ## Hyperparameters (Training Dashboard)
+
+### Optimal parameters (the shipped defaults)
+
+Each room's default hyperparameters are the ones that solve it well — found by sweeping and
+measuring greedy success over hundreds of episodes. Load a room, press **START TRAINING**, and
+these are what run:
+
+| Room · Algorithm | Optimal defaults | Result (greedy) |
+|---|---|---|
+| **1 Pacman · Value Iteration** | γ 0.95 · θ 1e-4 · ≤250 sweeps · slip 0.2 | **optimal policy** (DP is exact) |
+| **2 Museum · SARSA** | α 0.1 · γ 0.95 · ε 1.0→0.05 (×0.995/ep) · 2000 ep · slip 0.1 | **~96%** escape |
+| **3 Racing · Q-Learning** | α 0.2 · γ 0.95 · ε 1.0→**0.15** (kept high on purpose) · 1200 ep · slip 0.2 | **beats SARSA 100%**, 9-step lap |
+| **4 Football — match · DQN** | lr 5e-4 · γ 0.98 · expl 0.65 · batch 128 · 800 ep · 3 defenders | **~68%** goals |
+| **4 Football — free kick · DQN** | same DQN · `kick_spot=random` · dynamic wall (2–5) | **~65%** single-kick |
+| **5 Cross the Road · DQN** | lr 1e-3 · γ 0.99 · expl 0.5 · batch 64 · 600 ep · 14 cars | **~50–65%** crossing |
+
+Notes: Room 3 keeps a high minimum ε (0.15) so the on-policy/off-policy split survives; the
+DQN rooms use a 128×128 MLP with a 50 000-step replay buffer and a target net refreshed every
+500 steps. The free kick trains on 8× as many (one-kick) episodes as the shared `episodes`
+control implies, since each episode is a single step.
+
+### All the controls
 
 Every control in the UI comes from the backend schema in `backend/training/train.py`:
 
 * **DP (Room 1):** method (value/policy iteration), γ, convergence threshold θ, max iterations,
   evaluation episodes, map source/seed, slip probability, guard on/off + behaviour.
 * **SARSA / Q-Learning (Rooms 2–3):** α, γ, ε start / min / decay, episodes, max steps,
-  slip probability, map source/seed (+ alarm toggle in Room 2, booster quota in Room 3).
+  slip probability, map source/seed (+ alarm toggle in Room 2).
 * **DQN (Rooms 4–5):** learning rate, γ, ε start / min, exploration fraction, batch size,
   replay buffer size, target-network update frequency, episodes, max steps
-  (+ mode/defenders/keeper speed in Room 4; cars/speeds/sensor range/randomise in Room 5).
+  (+ mode / free-kick spot / defenders / keeper speed in Room 4;
+  cars / speeds / sensor range / randomise in Room 5).
 
 Press **SAVE CONFIG** to persist a setup as the room default (`results/configs/`).
 
@@ -239,8 +281,10 @@ Press **SAVE CONFIG** to persist a setup as the room default (`results/configs/`
 
 ## Replays
 
-Every training run records milestone episodes (1, 2, spread, final) and every evaluation
-records all 10 greedy episodes. The Replay tab plays them with **play / pause / reset /
+Every training run records a spread of **milestone episodes** (first, evenly spread, last) so you
+can watch the behaviour evolve stage by stage. The greedy evaluation then runs many episodes for
+a stable success rate (up to 500 for the one-kick free kick) but keeps ~15 of them as replays.
+The Replay tab plays them with **play / pause / reset /
 step ±1 / 0.25×–8× speed / scrubbing**, an interpolated animated canvas, and a state monitor
 showing the current state, action name, step reward, cumulative reward, per-step events and
 the terminal outcome. Football kicks are expanded into ball-flight frames; Cross-the-Road
@@ -260,7 +304,8 @@ python -m backend.training.train --room 3 --set episodes=1500 alpha=0.15
   design system (dark + light themes), per-room accents, HUD navigation and page transitions.
 * Every room is rendered as a **living HTML5 Canvas game**: neon Pacman maze with animated
   mouth and ghost guard; museum with camera sweeps, laser traps and alarm mode; street circuit
-  with lit city blocks, oil sheen and checkered finish; football pitch with physical ball
+  F1 circuit with a grass infield, red/white kerbs, TecPro barriers, a chicane and a checkered
+  finish; football pitch with physical ball
   flights; multi-lane traffic with a live sensor radar.
 * **Live training dashboard** — background training jobs stream downsampled metric series to
   Recharts graphs while the run is still going, with progress bar and stop control.

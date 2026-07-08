@@ -44,51 +44,47 @@ _DELTA = {UP: (-1, 0), DOWN: (1, 0), LEFT: (0, -1), RIGHT: (0, 1)}
 # '#'=grass infield '.'=track 'S'=start 'F'=finish '1'/'2'/'3'=checkpoint gates
 # 'O'=oil 'M'=gravel trap 'X'=crash barrier 'R'=risky racing line marker
 
-# ── Grand-Prix circuit (12×12) ──────────────────────────────────────────────
+# ── Grand-Prix circuit (10×10) ──────────────────────────────────────────────
 #
 #   A proper F1-style ribbon around a grass infield, centred in the grid with
-#   grass run-off top and bottom:
-#     * row 9 — the MAIN STRAIGHT (the express lane): S → F straight along a
-#       wall of TecPro crash barriers (row 8). Shortest line on the map, but
+#   grass run-off top and bottom (the first three rooms stay on a 10×10 grid):
+#     * row 8 — the MAIN STRAIGHT (the express lane): S → F straight along a
+#       wall of TecPro crash barriers (row 7). Shortest line on the map, but
 #       one twitch up into the barriers ends the race — the "cliff".
-#     * cols 0 & 11 + the back straight (row 2) — the outer loop (the safe way
+#     * cols 0 & 9 + the back straight (row 1) — the outer loop (the safe way
 #       round): longer, through the gravel run-off, nowhere near anything
 #       terminal — a SARSA rival prices the barrier risk in and takes it.
-#     * rows 2-3 — a CHICANE that kinks the back straight into the infield.
+#     * rows 1-2 — a CHICANE that kinks the back straight into the infield.
 #   Every gate sits on BOTH lines (one cell on the main straight, one on the
 #   outer loop) so there are two complete ways to drive from start to finish.
 #
 TRACK_BASE_LAYOUT = [
-    "############",  # 0: grass run-off (top)
-    "############",  # 1
-    ".....##.....",  # 2: back straight, split by the chicane gap
-    ".###....###.",  # 3: chicane apex (dips into the infield)
-    ".##########.",  # 4: outer loop (cols 0 & 11) around the grass infield
-    ".##########.",  # 5
-    ".##########.",  # 6
-    ".##########.",  # 7
-    ".XXXXXXXXXX.",  # 8: crash barriers — the cliff (open ends = pit exits)
-    "S..........F",  # 9: main straight — the express lane
-    "############",  # 10: grass run-off (bottom)
-    "############",  # 11
+    "##########",  # 0: grass run-off (top)
+    "....##....",  # 1: back straight, split by the chicane gap
+    ".##....##.",  # 2: chicane apex (dips into the infield)
+    ".########.",  # 3: outer loop (cols 0 & 9) around the grass infield
+    ".########.",  # 4
+    ".########.",  # 5
+    ".########.",  # 6
+    ".XXXXXXXX.",  # 7: crash barriers — the cliff (open ends = pit exits)
+    "S........F",  # 8: main straight — the express lane
+    "##########",  # 9: grass run-off (bottom)
 ]
 
 # ── Default layout (hand-placed gates + gravel) ─────────────────────────────
-#    Gate 1 / 2 each have a cell on the main straight (row 9) AND on the outer
-#    loop (row 2), so the express line and the safe loop both complete the lap.
+#    Gate 1 / 2 each have a cell on the main straight (row 8) AND on the outer
+#    loop (row 1), so the express line and the safe loop both complete the lap.
 DEFAULT_LAYOUT = [
-    "############",  # 0: grass run-off (top)
-    "############",  # 1
-    "...1.##.2...",  # 2: back straight — safe checkpoint cells + chicane gap
-    ".###....###.",  # 3: chicane apex
-    ".##########M",  # 4: gravel run-off on the right-hand straight
-    ".##########.",  # 5
-    "M##########.",  # 6: gravel run-off on the left-hand straight
-    ".##########.",  # 7
-    ".XXXXXXXXXX.",  # 8: crash barriers — the cliff
-    "SRRR1RRR2RRF",  # 9: main straight (R = racing line) + risky checkpoints
-    "############",  # 10: grass run-off (bottom)
-    "############",  # 11
+    "##########",  # 0: grass run-off (top)
+    "..1.##.2..",  # 1: back straight — safe checkpoint cells + chicane gap
+    ".##....##.",  # 2: chicane apex
+    ".########M",  # 3: gravel run-off on the right-hand straight
+    ".########.",  # 4
+    "M########.",  # 5: gravel run-off on the left-hand straight
+    ".########.",  # 6
+    ".XXXXXXXX.",  # 7: crash barriers — the cliff
+    "SRRR1RR2RF",  # 8: main straight (R = racing line) + risky checkpoints
+    "##########",  # 9: grass run-off (bottom)
 ]
 
 
@@ -186,7 +182,7 @@ def generate_racing_layout(
     """
     rng = random.Random(seed)
     layout = [list(row) for row in TRACK_BASE_LAYOUT]
-    N = len(layout)              # 12
+    N = len(layout)              # 10
 
     # structural rows (derived, so this survives layout tweaks)
     express_row = next(r for r, row in enumerate(TRACK_BASE_LAYOUT) if "S" in row)
@@ -201,14 +197,14 @@ def generate_racing_layout(
     # checkpoint gates: gate 1 early, gate 2 late, well separated so each
     # inter-gate chain along the cliff stays short enough to learn.
     g1 = rng.randint(3, 4)
-    g2 = rng.randint(8, 9)
+    g2 = rng.randint(6, 7)
     express_cols = [g1, g2][:max(1, n_gates)]
     for gi, col in enumerate(express_cols, start=1):
         layout[express_row][col] = str(gi)
 
     # matching gate cells on the outer loop (back straight), same order
     # left→right, skipping the chicane gap in the middle of the back straight
-    ring_cols = [rng.choice([2, 3]), rng.choice([8, 9])][:max(1, n_gates)]
+    ring_cols = [rng.choice([2, 3]), rng.choice([6, 7])][:max(1, n_gates)]
     for gi, col in enumerate(ring_cols, start=1):
         if layout[back_row][col] == ".":
             layout[back_row][col] = str(gi)

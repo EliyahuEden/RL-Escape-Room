@@ -111,14 +111,17 @@ export function renderFootball(ctx, W, H, scene) {
     ctx.restore();
   }
 
-  // free-kick wall line marker
-  if (freekick && layout.wall_x) {
+  // free-kick wall line — drawn THROUGH the actual wall players, so it follows
+  // the diagonal set-up when the kick is taken from the side of the pitch
+  if (freekick && f0?.defs && f0.defs.length >= 2) {
+    const pts = f0.defs.map((d) => [X(d[0]), Y(d[1])]);
     ctx.save();
     ctx.setLineDash([4, 8]);
     ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(X(layout.wall_x), pad);
-    ctx.lineTo(X(layout.wall_x), pad + SH);
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
     ctx.stroke();
     ctx.restore();
   }

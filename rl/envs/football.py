@@ -328,16 +328,22 @@ _FK_POWERS = ("soft", "hard")
 _FK_CURVES = ("left", "straight", "right")
 
 # Free-kick spots (kick_x, kick_y). The named spots are fixed drills; "random"
-# picks a fresh spot inside _FK_RANDOM_ZONE every episode, so a policy can be
-# trained to score from anywhere (the kick spot is part of the observation).
+# (the default) samples a fresh, truly-continuous spot inside _FK_RANDOM_ZONE
+# every episode — the full spread of far↔near (kick_x) × left↔right (kick_y) and
+# every combination. The kick spot is part of the observation, so one policy can
+# learn to score from anywhere.
 _FK_SPOTS = {
     "center": (3.5, 5.0),
-    "left":   (3.5, 3.8),
-    "right":  (3.5, 6.2),
-    "near":   (4.2, 5.0),
-    "far":    (2.4, 5.0),
+    "left":   (3.3, 3.3),
+    "right":  (3.3, 6.7),
+    "near":   (4.6, 5.0),
+    "far":    (2.2, 5.0),
 }
-_FK_RANDOM_ZONE = ((2.5, 4.2), (3.7, 6.3))  # (kick_x range, kick_y range)
+_FK_RANDOM_ZONE = ((2.0, 5.0), (2.8, 7.2))  # (kick_x range, kick_y range)
+# The wall grows with proximity to goal (round(kick_x), clamped). The obs always
+# reserves _FK_MAX_WALL slots (unused ones padded), so its length is fixed even
+# though the wall size changes every episode.
+_FK_MAX_WALL = 5
 
 def _fk_action_table():
     table = {}
@@ -354,9 +360,11 @@ _FK_ACTIONS = _fk_action_table()
 
 class FreeKickEnv:
     """Free kick: the player stands at a chosen spot (``kick_spot`` — a fixed
-    drill position, or ``"random"`` for a fresh spot every episode) and kicks
-    the ball toward the goal.  A **wall** of defenders stands between the player
-    and the goal, and a keeper patrols the goal mouth.
+    drill position, or ``"random"`` for a fresh continuous spot every episode)
+    and takes a **single kick** at goal.  A **wall** of defenders stands between
+    the player and the goal — the closer the kick is to goal, the more players
+    the defence puts in the wall (``dynamic_wall``) — and a keeper patrols the
+    goal mouth.
 
     The ball has 3D physics: it travels in (x, y) on the pitch and also rises
     and falls in z (height).  High shots arc over the wall but are slower and
@@ -388,7 +396,8 @@ class FreeKickEnv:
         r_miss: float = -15.0,
         r_blocked: float = -30.0,
         r_post: float = -5.0,
-        max_attempts: int = 5,
+        max_attempts: int = 1,
+        dynamic_wall: bool = True,
         randomize: bool = True,
         seed: Optional[int] = None,
     ) -> None:
@@ -399,6 +408,8 @@ class FreeKickEnv:
         self.k_lo = self.goal_lo + 0.3
         self.k_hi = self.goal_hi - 0.3
         self.n_wall = int(n_wall)
+        self.dynamic_wall = dynamic_wall
+        self.max_wall = _FK_MAX_WALL
         self.kick_spot = kick_spot
         if kick_spot in _FK_SPOTS:              # named drill overrides x/y
             kick_x, kick_y = _FK_SPOTS[kick_spot]
@@ -406,7 +417,8 @@ class FreeKickEnv:
         self.kick_y_base = kick_y
         self.kick_x = kick_x
         self.kick_y = kick_y
-        self.wall_x_offset = 2.6
+        self.wall_x_offset = 2.6     # wall distance from the ball toward goal
+        self.wall_spacing = 0.6      # gap between wall players (shoulder to shoulder)
         self.wall_x = wall_x
         self.keeper_speed = keeper_speed
         self.keeper_reach = keeper_reach
@@ -427,18 +439,30 @@ class FreeKickEnv:
         self.attempts = 0
         self.dt = 0.02
         self.n_actions = len(_FK_ACTIONS)
-        self.obs_dim = 4 + 2 * self.n_wall
+        self.obs_dim = 4 + 2 * self.max_wall   # fixed: wall slots are padded
         self.reset()
 
     def _spawn_wall(self) -> List[List[float]]:
-        center = self.kick_y
-        spacing = 0.9
+        # The wall stands on the line from the ball to the goal centre, facing
+        # the ball — so a kick from the side gets a wall set DIAGONALLY between
+        # the ball and the goal (truly in the way), not a vertical row straight
+        # in front of the ball. Players stand shoulder to shoulder.
+        bx, by = self.kick_x, self.kick_y
+        dx, dy = self.W - bx, self.goal_cy - by
+        L = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / L, dy / L               # ball -> goal (unit)
+        px, py = -uy, ux                       # along the wall (perpendicular)
+        cx = bx + ux * self.wall_x_offset      # wall centre
+        cy = by + uy * self.wall_x_offset
+        self.wall_x = cx                       # representative x for the renderer
         wall = []
         for i in range(self.n_wall):
-            wy = center + (i - (self.n_wall - 1) / 2.0) * spacing
+            off = (i - (self.n_wall - 1) / 2.0) * self.wall_spacing
             if self.randomize:
-                wy += self.rng.uniform(-0.15, 0.15)
-            wall.append([self.wall_x, min(max(wy, 1.0), self.H - 1.0)])
+                off += self.rng.uniform(-0.05, 0.05)
+            wx = min(max(cx + px * off, 0.4), self.W - 0.3)
+            wy = min(max(cy + py * off, 0.5), self.H - 0.5)
+            wall.append([wx, wy])
         return wall
 
     def reset(self):
@@ -451,8 +475,9 @@ class FreeKickEnv:
         else:
             self.kick_x = self.kick_x_base
             self.kick_y = self.kick_y_base
-        self.wall_x = self.kick_x + self.wall_x_offset
-        self.wall_x = min(self.wall_x, self.W - 1.5)
+        # the closer to goal, the bigger the wall the defence sets (2..MAX)
+        if self.dynamic_wall:
+            self.n_wall = min(self.max_wall, max(2, round(self.kick_x)))
         # keeper starts anywhere along the goal mouth (not always centred), so
         # the striker has to READ the keeper and pick the shot that beats it —
         # a fixed action can no longer win every time.
@@ -471,8 +496,14 @@ class FreeKickEnv:
             self.kick_x / self.W,
             self.kick_y / self.H,
         ]
-        for wx, wy in self.wall_players:
-            feats += [(wx - self.kick_x) / self.W, (wy - self.kick_y) / self.H]
+        # fixed-length: up to max_wall slots, real players first then padding,
+        # so a variable wall size never changes the observation length
+        for i in range(self.max_wall):
+            if i < len(self.wall_players):
+                wx, wy = self.wall_players[i]
+                feats += [(wx - self.kick_x) / self.W, (wy - self.kick_y) / self.H]
+            else:
+                feats += [0.0, 0.0]
         return np.asarray(feats, dtype=np.float32)
 
     def _resolve_kick(self, aim: str, power_key: str, curve_dir: str):
@@ -591,7 +622,7 @@ class FreeKickEnv:
             success = False
             done = self.attempts >= self.max_attempts
 
-        if done and not success:
+        if done and not success and self.max_attempts > 1:
             event += " (out of attempts)"
 
         info = {"success": success, "event": event, "outcome": outcome,

@@ -216,15 +216,18 @@ ROOMS: dict[int, dict] = {
             _p("mode", "Game mode", "select", "match",
                options=["match", "freekick"],
                help_="match = dribble + shoot. freekick = 3D set piece over a wall."),
-            _p("kick_spot", "Free-kick spot", "select", "center",
-               options=["center", "left", "right", "near", "far", "random"],
+            _p("kick_spot", "Free-kick spot", "select", "random",
+               options=["random", "center", "left", "right", "near", "far"],
                help_="Where the free kick is taken from (free-kick mode only). "
-                     "'random' varies the spot every episode to train one policy "
-                     "that can score from anywhere."),
+                     "'random' (default) samples a fresh continuous spot every "
+                     "episode — any distance and angle — so one policy learns to "
+                     "score from anywhere. The wall auto-scales with distance."),
         ] + _dqn_params(episodes=800, max_steps=160, max_steps_rng=(60, 300),
                         lr=0.0005, gamma=0.98, exploration_fraction=0.65,
                         batch_size=128) + [
-            _p("n_defenders", "Defenders / wall size", "int", 3, 1, 5, 1),
+            _p("n_defenders", "Defenders (match)", "int", 3, 1, 5, 1,
+               help_="Chasing defenders in match mode. In free-kick mode the "
+                     "wall size is set automatically by how far out the kick is."),
             _p("keeper_speed", "Keeper patrol speed (m/s)", "float", 1.5, 0.5, 4.0, 0.25),
             _SEED,
         ],
@@ -324,9 +327,9 @@ def make_env(room_id: int, params: dict):
                          max_steps=params["max_steps"], seed=seed)
     if room_id == 4:
         if params.get("mode") == "freekick":
-            return FreeKickEnv(n_wall=params["n_defenders"],
-                               keeper_speed=params["keeper_speed"],
-                               kick_spot=params.get("kick_spot", "center"),
+            # wall size is dynamic (set by kick distance), not by n_defenders
+            return FreeKickEnv(keeper_speed=params["keeper_speed"],
+                               kick_spot=params.get("kick_spot", "random"),
                                seed=seed)
         return FootballEnv(n_defenders=params["n_defenders"],
                            keeper_speed=params["keeper_speed"],
@@ -355,17 +358,24 @@ def room_layout(room_id: int, params: Optional[dict] = None) -> dict:
 
 
 # ===========================================================================
-#  Shared greedy evaluation (records every episode as an eval replay)
+#  Shared greedy evaluation
+#  Runs ``n`` episodes for a stable success rate, but only saves the first
+#  ``record_max`` as replays (so a big, steady metric doesn't flood the reel).
 # ===========================================================================
 def run_greedy_eval(room_id: int, env, act_fn: Callable, recorder: ReplayRecorder,
-                    max_steps: int, n: int = 10, label: str = "Greedy eval") -> dict:
+                    max_steps: int, n: int = 10, label: str = "Greedy eval",
+                    record_max: Optional[int] = None) -> dict:
     frame_fn = FRAME_FNS[room_id]
     layout_fn = LAYOUT_FNS[room_id]
+    if record_max is None:
+        record_max = n
     wins, rewards, steps_list = 0, [], []
     for ep in range(1, n + 1):
+        rec = ep <= record_max
         state = env.reset()
-        recorder.start(f"eval_{ep:04d}")
-        recorder.add_frame(frame_fn(env, None, 0.0, 0.0, False, {}))
+        if rec:
+            recorder.start(f"eval_{ep:04d}")
+            recorder.add_frame(frame_fn(env, None, 0.0, 0.0, False, {}))
         cum, steps, done = 0.0, 0, False
         success, fail = False, None
         while not done and steps < max_steps:
@@ -373,8 +383,9 @@ def run_greedy_eval(room_id: int, env, act_fn: Callable, recorder: ReplayRecorde
             state, r, done, info = env.step(a)
             cum += r
             steps += 1
-            recorder.add_frame(frame_fn(env, int(a), float(r), round(cum, 2),
-                                        bool(done), info))
+            if rec:
+                recorder.add_frame(frame_fn(env, int(a), float(r), round(cum, 2),
+                                            bool(done), info))
             if info.get("success") or info.get("escaped"):
                 success = True
             for k in ("caught", "crash", "collision"):
@@ -385,11 +396,12 @@ def run_greedy_eval(room_id: int, env, act_fn: Callable, recorder: ReplayRecorde
         wins += success
         rewards.append(cum)
         steps_list.append(steps)
-        recorder.finish({"kind": "eval", "episode": ep,
-                         "label": f"{label} {ep}", "reward": round(cum, 1),
-                         "steps": steps, "success": success,
-                         "fail_reason": None if success else (fail or "timeout"),
-                         "layout": layout_fn(env)})
+        if rec:
+            recorder.finish({"kind": "eval", "episode": ep,
+                             "label": f"{label} {ep}", "reward": round(cum, 1),
+                             "steps": steps, "success": success,
+                             "fail_reason": None if success else (fail or "timeout"),
+                             "layout": layout_fn(env)})
     return {"episodes": n, "success_rate": round(wins / n, 3),
             "avg_reward": round(float(np.mean(rewards)), 2),
             "avg_steps": round(float(np.mean(steps_list)), 1)}
@@ -682,9 +694,10 @@ def train_td(room_id: int, params: dict, progress=None, stop=None) -> dict:
             return bool(pinfo.get("success")) and detoured
 
         try:
-            # SARSA's greedy trace varies with the seed; retry a few until one
-            # both finishes AND takes the safe detour (the intended contrast)
-            for attempt in range(6):
+            # SARSA's greedy trace varies with the seed; retry until one both
+            # finishes AND takes the safe detour (the intended contrast). Each
+            # retry is a full but fast tabular train, so we can afford plenty.
+            for attempt in range(10):
                 rival_result = td_core.train(
                     make_env(3, params), algo="sarsa",
                     episodes=params["episodes"], alpha=params["alpha"],
@@ -770,16 +783,19 @@ def train_dqn_room(room_id: int, params: dict, progress=None, stop=None) -> dict
     algo = ("DQN (free kick)" if room_id == 4 and params.get("mode") == "freekick"
             else "DQN")
     env = make_env(room_id, params)
+    freekick = room_id == 4 and params.get("mode") == "freekick"
+    # a free kick is a single kick per episode, so train on many more (1-step)
+    # episodes for enough gradient updates — 8x converges (~65%), 4x is noisy
+    n_episodes = params["episodes"] * 8 if freekick else params["episodes"]
+    max_steps = 1 if freekick else params["max_steps"]
     recorder = ReplayRecorder(room_id, clear=True)
-    recorder.plan_milestones(params["episodes"])
+    recorder.plan_milestones(n_episodes)
     layout_fn = LAYOUT_FNS[room_id]
     wrapped = RecordingEnv(env, recorder, FRAME_FNS[room_id],
                            meta_fn=lambda e: {"layout": layout_fn(e)})
     t0 = time.time()
     holder: dict = {}
-    report_every = max(1, params["episodes"] // 200)
-    freekick = room_id == 4 and params.get("mode") == "freekick"
-    max_steps = 6 if freekick else params["max_steps"]
+    report_every = max(1, n_episodes // 200)
 
     def cb(ep, total, res):
         holder["result"] = res
@@ -791,7 +807,7 @@ def train_dqn_room(room_id: int, params: dict, progress=None, stop=None) -> dict
     stopped = False
     try:
         result = dqn_mod.train(
-            wrapped, episodes=params["episodes"], hidden=(128, 128),
+            wrapped, episodes=n_episodes, hidden=(128, 128),
             lr=params["lr"], gamma=params["gamma"],
             batch_size=params["batch_size"], buffer_size=params["buffer_size"],
             eps_start=params["eps_start"], eps_end=params["eps_end"],
@@ -819,10 +835,12 @@ def train_dqn_room(room_id: int, params: dict, progress=None, stop=None) -> dict
                 q = model(torch.as_tensor(obs, dtype=torch.float32))
                 return int(torch.argmax(q).item())
 
-        # 20 greedy episodes (not 10) so the reported success rate is a stable
-        # estimate — with ~70-100% policies a 10-episode sample swings wildly.
+        # evaluate over many episodes for a stable success rate, but only keep
+        # a handful as replays. The free kick is one quick kick per episode, so
+        # it can afford far more eval episodes.
+        n_eval = 500 if freekick else 60
         eval_summary = run_greedy_eval(room_id, env, act, recorder,
-                                       max_steps, n=20)
+                                       max_steps, n=n_eval, record_max=15)
         torch.save({"state_dict": model.state_dict(),
                     "obs_dim": env.obs_dim, "n_actions": env.n_actions,
                     "hidden": [128, 128]}, model_path(room_id, "pt"))
