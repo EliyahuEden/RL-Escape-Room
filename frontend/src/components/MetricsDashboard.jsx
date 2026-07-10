@@ -98,7 +98,7 @@ export default function MetricsDashboard({ series, summary, evalSummary }) {
   const epRows = toRows(series, 'episode', [
     'reward', 'reward_avg', 'steps', 'epsilon', 'success_rate', 'failure_rate',
     'td_error', 'loss', 'camera_hits', 'caught', 'trap_hits', 'crashes', 'shortcuts',
-    'rival_reward_avg', 'rival_success_rate',
+    'crash_rate', 'rival_crash_rate', 'rival_reward_avg', 'rival_success_rate',
   ]);
   const hasRival = !!series.rival_reward_avg;
 
@@ -133,6 +133,17 @@ export default function MetricsDashboard({ series, summary, evalSummary }) {
       </ChartCard>,
     );
   }
+  if (series.crash_rate) {
+    charts.push(
+      <ChartCard key="crash" title={hasRival
+        ? 'Crashes into the cliff during training — Q-Learning vs SARSA rival (rolling 75)'
+        : 'Crashes into the cliff during training (rolling 75)'}>
+        <Lines rows={epRows}
+          defs={[['crash_rate', 'var(--red)', 2],
+            ...(hasRival ? [['rival_crash_rate', 'var(--purple)', 1.8]] : [])]} />
+      </ChartCard>,
+    );
+  }
   if (series.epsilon) {
     charts.push(
       <ChartCard key="eps" title="Exploration rate ε over time">
@@ -155,11 +166,11 @@ export default function MetricsDashboard({ series, summary, evalSummary }) {
       </ChartCard>,
     );
   }
+  // (crashes get their own rolling-rate chart above; keep the rest here)
   const hazardDefs = [
     ['camera_hits', 'var(--red)', 'Camera detections'],
     ['caught', 'var(--red-2)', 'Caught by guards'],
     ['trap_hits', 'var(--orange)', 'Trap hits'],
-    ['crashes', 'var(--red)', 'Crashes'],
     ['shortcuts', 'var(--sky)', 'Shortcut tiles used'],
   ].filter(([k]) => series[k] && series[k].some((v) => v));
   if (hazardDefs.length) {

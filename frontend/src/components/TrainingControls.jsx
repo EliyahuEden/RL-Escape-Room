@@ -1,18 +1,54 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
+import GameCanvas from './GameCanvas.jsx';
 
 /**
  * Schema-driven hyperparameter console + train/stop/evaluate actions.
  * The schema comes from the backend room registry, so adding a parameter
  * in Python automatically grows a control here.
+ *
+ * Controls flagged `regen` in the schema (coin / guard / camera / oil counts,
+ * map seed …) shape a *generated* layout: changing one flips the map source to
+ * "generated" and refreshes the live preview so you can see the difficulty you
+ * are dialling in before you train.
  */
 export default function TrainingControls({ room, status, onTrain, onStop,
-                                           onEvaluate, busyEval }) {
+                                           onEvaluate, onPreview, busyEval }) {
   const [values, setValues] = useState(() => ({ ...(room.values || {}) }));
   const [saveMsg, setSaveMsg] = useState('');
 
   const running = status?.state === 'running';
-  const set = (k, val) => setValues((v) => ({ ...v, [k]: val }));
+  const hasMap = room.params.some((p) => p.key === 'map_mode');
+  const regenKeys = room.params.filter((p) => p.regen).map((p) => p.key);
+
+  const set = (k, val) => setValues((v) => {
+    const nv = { ...v, [k]: val };
+    // touching a difficulty/layout count means you want a generated map
+    const p = room.params.find((pp) => pp.key === k);
+    if (p && p.regen && hasMap && k !== 'map_seed') nv.map_mode = 'generated';
+    return nv;
+  });
+
+  // debounced live preview: whenever the map source or a regen count changes,
+  // rebuild the layout on the backend and repaint the canvas.
+  const firstRun = useRef(true);
+  const previewSig = hasMap
+    ? JSON.stringify([values.map_mode, ...regenKeys.map((k) => values[k])])
+    : '';
+  useEffect(() => {
+    if (!hasMap || !onPreview) return undefined;
+    if (firstRun.current) { firstRun.current = false; return undefined; }
+    const t = setTimeout(() => onPreview(values), 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewSig]);
+
+  const newRandomLayout = () => {
+    const seed = Math.floor(Math.random() * 9999);
+    const nv = { ...values, map_mode: 'generated', map_seed: seed };
+    setValues(nv);
+    if (onPreview) onPreview(nv);
+  };
 
   const renderField = (p) => {
     if (p.type === 'bool') {
@@ -44,7 +80,7 @@ export default function TrainingControls({ room, status, onTrain, onStop,
     const step = p.step ?? (p.type === 'int' ? 1 : 0.01);
     return (
       <div key={p.key} className="field" title={p.help || ''}>
-        <label>{p.label}</label>
+        <label>{p.label}{p.regen && <span className="regen-dot" title="shapes the generated map"> ◇</span>}</label>
         <input type="number" value={values[p.key]}
           min={p.min ?? undefined} max={p.max ?? undefined} step={step}
           disabled={running}
@@ -77,6 +113,37 @@ export default function TrainingControls({ room, status, onTrain, onStop,
     <div className="panel accent">
       <h3 className="panel-title">TRAINING CONSOLE — {room.algorithm}</h3>
 
+      {hasMap && (
+        <div className="map-studio">
+          <div className="map-studio-preview">
+            <GameCanvas layout={room.layout} size={260} />
+          </div>
+          <div className="map-studio-controls">
+            <div className="subtle" style={{ marginBottom: 8 }}>
+              Map source: <b>{values.map_mode}</b>
+              {values.map_mode === 'generated' && <> · seed <b>{values.map_seed}</b></>}
+            </div>
+            <button className="btn btn-primary" disabled={running}
+              onClick={newRandomLayout}
+              title="Roll a fresh randomised layout built from the difficulty counts below">
+              🎲 New random layout
+            </button>
+            {values.map_mode === 'generated' && (
+              <button className="btn btn-sm" disabled={running}
+                style={{ marginTop: 8 }}
+                onClick={() => set('map_mode', 'classic')}
+                title="Go back to the curated hand-made map">
+                ↺ Use curated map
+              </button>
+            )}
+            <p className="subtle" style={{ marginTop: 10, fontSize: 12 }}>
+              Controls marked ◇ shape the generated map. Adjust them and the
+              preview updates live; press START TRAINING to learn on this map.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(185px, 1fr))', gap: 14 }}>
         {room.params.map(renderField)}
       </div>
@@ -104,6 +171,7 @@ export default function TrainingControls({ room, status, onTrain, onStop,
             const v = {};
             room.params.forEach((p) => { v[p.key] = p.default; });
             setValues(v);
+            if (hasMap && onPreview) onPreview(v);
           }}>
           RESET DEFAULTS
         </button>

@@ -46,10 +46,13 @@ class StopRequested(Exception):
 #  Hyperparameter schemas (rendered as controls by the frontend)
 # ===========================================================================
 def _p(key, label, type_, default, minv=None, maxv=None, step=None,
-       options=None, help_=""):
+       options=None, help_="", regen=False):
+    # regen=True marks a control that shapes a *generated* layout (coin/guard/
+    # camera/oil counts …). The frontend flips the map source to "generated" and
+    # refreshes the live preview whenever one of these changes.
     return {"key": key, "label": label, "type": type_, "default": default,
             "min": minv, "max": maxv, "step": step, "options": options,
-            "help": help_}
+            "help": help_, "regen": regen}
 
 
 def _td_params(episodes=800, max_steps=200, eps_end=0.05, eps_end_help="",
@@ -92,9 +95,11 @@ _SEED = _p("seed", "Random seed", "int", 0, 0, 9999, 1)
 _MAP = [
     _p("map_mode", "Map source", "select", "classic",
        options=["classic", "generated"],
-       help_="classic = the curated hand-made map; generated = random items "
-             "on the same floor plan."),
-    _p("map_seed", "Map seed", "int", 10, 0, 9999, 1),
+       help_="classic = the curated hand-made map; generated = random items on "
+             "the same floor plan (shaped by the difficulty counts below). Use "
+             "the 'New random layout' button to roll a fresh one."),
+    _p("map_seed", "Map seed", "int", 10, 0, 9999, 1, regen=True,
+       help_="Which random generated map to build. 'New random layout' bumps it."),
 ]
 
 
@@ -110,10 +115,11 @@ ROOMS: dict[int, dict] = {
         "icon": "pacman",
         "description": (
             "A 10×10 arcade maze with a fully-known model. Collect every coin "
-            "— only then does the exit door unlock. Icy tiles deflect moves "
-            "sideways, and an optional guard patrols or chases. Because the "
-            "transition model is known, Value/Policy Iteration compute the "
-            "optimal policy offline — no exploration at all."),
+            "— only then does the exit door unlock. Two routes lead to the exit, "
+            "icy tiles deflect moves sideways, and a guard chases you from the "
+            "centre (or patrols a fixed loop). Because the transition model is "
+            "known, Value/Policy Iteration compute the optimal policy offline — "
+            "no exploration at all."),
         "state": "(cell, coin-bitmask [, guard]) — position + coins still on the board",
         "actions": "4 — Up / Down / Left / Right",
         "rewards": "step −1 · coin +10 · exit +100 · locked door −10 · slip −5 · wall −5 · guard −50",
@@ -126,14 +132,22 @@ ROOMS: dict[int, dict] = {
             _p("eval_episodes", "Evaluation episodes", "int", 20, 5, 100, 5),
             _p("max_steps", "Max steps / episode", "int", 200, 50, 500, 25),
             *_MAP,
-            _p("n_coins", "Coins (generated map)", "int", 4, 2, 8, 1),
-            _p("n_slippery", "Ice tiles (generated map)", "int", 5, 0, 15, 1),
+            _p("n_coins", "Coins", "int", 4, 2, 6, 1, regen=True,
+               help_="Coins to collect (generated maps). Each coin DOUBLES the "
+                     "DP state space, so with a chasing guard keep it modest — "
+                     "patrol mode is far cheaper if you want many."),
+            _p("n_slippery", "Ice tiles", "int", 5, 0, 16, 1, regen=True,
+               help_="Icy tiles on a generated map — cheap, they only add slip."),
             _p("slip_prob", "Slip probability", "float", 0.2, 0.0, 0.5, 0.05),
-            _p("guard_enabled", "Enable guard", "bool", True),
-            _p("guard_mode", "Guard behaviour", "select", "patrol",
-               options=["patrol", "chase"],
-               help_="patrol = fixed route (small state space). chase = hunts "
-                     "the agent (much bigger state space, slower to solve)."),
+            _p("guard_enabled", "Enable guard", "bool", True, regen=True),
+            _p("guard_mode", "Guard behaviour", "select", "chase",
+               options=["chase", "patrol"],
+               help_="chase = hunts the agent from its central start, right from "
+                     "the first move (the guard's cell enters the DP state). "
+                     "patrol = fixed loop (much smaller state space, faster)."),
+            _p("guard_speed", "Guard speed", "int", 1, 1, 3, 1,
+               help_="Cells the guard moves per step — a faster chaser is much "
+                     "harder to escape, and it costs no extra DP states."),
             _SEED,
         ],
     },
@@ -161,6 +175,16 @@ ROOMS: dict[int, dict] = {
             _p("alarm_enabled", "Camera alarm system", "bool", True,
                help_="One camera sighting makes the guards chase you for the "
                      "rest of the episode."),
+            _p("n_cameras", "Cameras", "int", 7, 2, 12, 1, regen=True,
+               help_="Camera vision cells on a generated map — more coverage to "
+                     "sneak past (and more ways to trip the manhunt)."),
+            _p("n_traps", "Laser traps", "int", 2, 0, 6, 1, regen=True,
+               help_="Laser traps on a generated map (−15 each)."),
+            _p("n_guards", "Patrol guards", "int", 2, 0, 5, 1, regen=True,
+               help_="Patrolling guards on a generated map — they hunt you once "
+                     "the alarm is raised."),
+            _p("n_slippery", "Marble tiles", "int", 6, 0, 16, 1, regen=True,
+               help_="Slippery marble tiles on a generated map."),
             *_MAP, _SEED,
         ],
     },
@@ -184,12 +208,19 @@ ROOMS: dict[int, dict] = {
             "hugging lap and wins. Cliff walking, staged as a race."),
         "state": "(cell, next-checkpoint) — each car tracks its own lap progress",
         "actions": "4 — Up / Down / Left / Right",
-        "rewards": "step −1 · checkpoint +40 · finish +200 · crash −200 · gravel −5 · locked finish −10 · fastest car wins the race",
+        "rewards": "step −1 · checkpoint +40 · finish +200 · crash −200 · gravel −5 · oil-slip −5 · locked finish −10 · fastest car wins the race",
         "params": _td_params(episodes=1200, eps_end=0.15, alpha=0.2,
                              eps_end_help="Kept high on purpose: lingering "
                              "exploration is what makes the barrier lane "
                              "dangerous for the on-policy SARSA rival.") + [
             _p("slip_prob", "Oil slip probability", "float", 0.2, 0.0, 0.5, 0.05),
+            _p("n_oil", "Oil slicks", "int", 3, 0, 6, 1, regen=True,
+               help_="Oil slicks on a generated map — slippery but survivable "
+                     "(a slip slides the car sideways; only the barriers crash)."),
+            _p("n_mud", "Gravel traps", "int", 2, 0, 4, 1, regen=True,
+               help_="Gravel run-off patches on a generated map (−5 each)."),
+            _p("n_gates", "Checkpoints", "int", 2, 1, 2, 1, regen=True,
+               help_="Checkpoint gates to cross in order before the finish opens."),
             *_MAP, _SEED,
         ],
     },
@@ -222,7 +253,7 @@ ROOMS: dict[int, dict] = {
                      "'random' (default) samples a fresh continuous spot every "
                      "episode — any distance and angle — so one policy learns to "
                      "score from anywhere. The wall auto-scales with distance."),
-        ] + _dqn_params(episodes=800, max_steps=160, max_steps_rng=(60, 300),
+        ] + _dqn_params(episodes=900, max_steps=160, max_steps_rng=(60, 300),
                         lr=0.0005, gamma=0.98, exploration_fraction=0.65,
                         batch_size=128) + [
             _p("n_defenders", "Defenders (match)", "int", 3, 1, 5, 1,
@@ -251,7 +282,7 @@ ROOMS: dict[int, dict] = {
         "state": "x, y, Vx, Vy, goal direction + 6 sensor slots × 4 features",
         "actions": "9 — 8 directions (incl. diagonals) + Stay",
         "rewards": "cross +250 · collision −140 · off-road −40 · near-miss penalty · progress shaping",
-        "params": _dqn_params(episodes=600, max_steps=350, max_steps_rng=(120, 800)) + [
+        "params": _dqn_params(episodes=900, max_steps=350, max_steps_rng=(120, 800)) + [
             _p("n_cars", "Number of cars", "int", 14, 4, 24, 1),
             _p("car_speed", "Traffic speed (m/s)", "float", 1.35, 0.7, 2.4, 0.05),
             _p("player_speed", "Chicken speed (m/s)", "float", 1.6, 1.0, 2.6, 0.1),
@@ -313,15 +344,23 @@ def make_env(room_id: int, params: dict):
         return PacmanEnv(layout=layout, slip_prob=params["slip_prob"],
                          max_steps=params["max_steps"],
                          guard_enabled=params["guard_enabled"],
-                         guard_mode=params["guard_mode"], seed=seed)
+                         guard_mode=params["guard_mode"],
+                         guard_speed=params["guard_speed"], seed=seed)
     if room_id == 2:
-        layout = (generate_museum_layout(seed=params["map_seed"])
+        layout = (generate_museum_layout(seed=params["map_seed"],
+                                         n_cameras=params["n_cameras"],
+                                         n_traps=params["n_traps"],
+                                         n_slippery=params["n_slippery"],
+                                         n_guards=params["n_guards"])
                   if params["map_mode"] == "generated" else MUSEUM_DEFAULT)
         return MuseumEnv(layout=layout, slip_prob=params["slip_prob"],
                          max_steps=params["max_steps"],
                          alarm_enabled=params["alarm_enabled"], seed=seed)
     if room_id == 3:
-        layout = (generate_racing_layout(seed=params["map_seed"])
+        layout = (generate_racing_layout(seed=params["map_seed"],
+                                         n_oil=params["n_oil"],
+                                         n_mud=params["n_mud"],
+                                         n_gates=params["n_gates"])
                   if params["map_mode"] == "generated" else RACING_DEFAULT)
         return RacingEnv(layout=layout, slip_prob=params["slip_prob"],
                          max_steps=params["max_steps"], seed=seed)
@@ -667,6 +706,7 @@ def train_td(room_id: int, params: dict, progress=None, stop=None) -> dict:
                     rs = mt.build_series(res)
                     s["rival_reward_avg"] = rs.get("reward_avg")
                     s["rival_success_rate"] = rs.get("success_rate")
+                    s["rival_crash_rate"] = rs.get("crash_rate")
                     return s
                 progress(ep, total, merged,
                          "training the SARSA rival on the same track")
@@ -730,6 +770,7 @@ def train_td(room_id: int, params: dict, progress=None, stop=None) -> dict:
             rs = mt.build_series(rival_result)
             series["rival_reward_avg"] = rs.get("reward_avg")
             series["rival_success_rate"] = rs.get("success_rate")
+            series["rival_crash_rate"] = rs.get("crash_rate")
             summary["rival_algorithm"] = "SARSA"
             summary["rival_success_rate_last50"] = round(
                 rival_result.success_rate(50), 3)
@@ -785,7 +826,7 @@ def train_dqn_room(room_id: int, params: dict, progress=None, stop=None) -> dict
     env = make_env(room_id, params)
     freekick = room_id == 4 and params.get("mode") == "freekick"
     # a free kick is a single kick per episode, so train on many more (1-step)
-    # episodes for enough gradient updates — 8x converges (~65%), 4x is noisy
+    # episodes for enough gradient updates — 8x converges (~67%), 4x is noisy
     n_episodes = params["episodes"] * 8 if freekick else params["episodes"]
     max_steps = 1 if freekick else params["max_steps"]
     recorder = ReplayRecorder(room_id, clear=True)

@@ -24,6 +24,7 @@ async function post(path, body) {
 export const api = {
   rooms: () => get('/rooms'),
   room: (id) => get(`/rooms/${id}`),
+  preview: (id, values) => post(`/rooms/${id}/preview`, { values }),
   train: (id, params) => post(`/train/${id}`, { params }),
   status: (id) => get(`/train/${id}/status`),
   stop: (id) => post(`/train/${id}/stop`),

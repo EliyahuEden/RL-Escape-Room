@@ -68,6 +68,15 @@ def build_series(result: TrainResult) -> Dict[str, list]:
             continue
         key = _EXTRA_KEYS.get(label, _slug(label))
         out[key] = [None if v is None else round(float(v), 4) for v in series]
+    # a crash is terminal (≤1 per episode), so smooth the per-episode crash
+    # flags into a rolling "crash rate" — this is what makes the cliff's cost
+    # legible and lets Q-Learning be compared against the SARSA rival.
+    crashes = result.extra.get("Crashes / episode")
+    if crashes:
+        # a wider window than the success rate — a crash is a rarer, terminal
+        # event, so more smoothing keeps the Q-vs-SARSA separation readable
+        out["crash_rate"] = [round(r, 3) for r in
+                             windowed_rate([bool(c) for c in crashes], 75)]
     return out
 
 

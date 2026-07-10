@@ -76,6 +76,23 @@ def room_detail(room_id: int):
     return clean(detail)
 
 
+class PreviewRequest(BaseModel):
+    values: dict = {}
+
+
+@router.post("/rooms/{room_id}/preview")
+def preview_layout(room_id: int, req: PreviewRequest):
+    """Build the layout for a set of (unsaved) hyperparameter values so the UI
+    can show a live preview of a generated map before training."""
+    check_room(room_id)
+    params = tr.merge_params(room_id, req.values)
+    return clean({
+        "layout": tr.room_layout(room_id, params),
+        "values": params,
+        "action_names": fr.action_names(room_id, params.get("mode")),
+    })
+
+
 class ConfigRequest(BaseModel):
     values: dict = {}
 

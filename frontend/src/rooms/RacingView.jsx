@@ -10,7 +10,7 @@ export default function RacingView({ room }) {
         ['#38bdf8', 'Checkpoint gates — cross 1 then 2; every gate exists on BOTH routes'],
         ['#d21b2d', 'Crash barriers — one touch ends the race (−200)'],
         ['#c4a46e', 'Gravel trap — slows the car (−5)'],
-        ['#0c0d12', 'Oil slick — slippery; a slip into a wall = crash'],
+        ['#9a6ee1', 'Oil slick — slippery; slides the car sideways (−5), survivable'],
         ['#e5e7eb', 'Finish line — opens after all checkpoints; first car home wins'],
         ['#0d3d20', 'Grass infield — off the racing surface'],
       ]}

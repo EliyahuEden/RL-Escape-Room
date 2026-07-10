@@ -99,6 +99,15 @@ export default function RoomPage() {
 
   const onStop = async () => { try { await api.stop(roomId); } catch { /* noop */ } };
 
+  // live map preview: rebuild the layout for the (unsaved) console values so the
+  // canvas updates the moment you change a count or roll a new random layout.
+  const onPreview = async (vals) => {
+    try {
+      const res = await api.preview(roomId, vals);
+      setRoom((r) => (r ? { ...r, layout: res.layout, values: res.values } : r));
+    } catch (e) { setError(String(e.message || e)); }
+  };
+
   const onEvaluate = async () => {
     setEvalBusy(true);
     setError('');
@@ -168,7 +177,7 @@ export default function RoomPage() {
       {tab === 'TRAIN' && (
         <div className="stack fade-in">
           <TrainingControls room={room} status={status}
-            onTrain={onTrain} onStop={onStop}
+            onTrain={onTrain} onStop={onStop} onPreview={onPreview}
             onEvaluate={onEvaluate} busyEval={evalBusy} />
           {evalResult && (
             <div className="panel">

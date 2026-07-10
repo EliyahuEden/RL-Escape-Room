@@ -428,6 +428,27 @@ html:not([data-theme='light']) .btn:hover:not(:disabled) { color: #fff; }
 .btn-sm { padding: 6px 12px; font-size: 10.5px; }
 
 /* ---------- forms ---------- */
+/* map studio — live preview + "new random layout" for the grid rooms */
+.map-studio {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.map-studio-preview {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #05070f;
+}
+.map-studio-preview canvas { display: block; width: 260px; height: 260px; }
+.map-studio-controls { flex: 1 1 220px; min-width: 200px; }
+.regen-dot { color: var(--accent); font-size: 11px; opacity: 0.85; }
+
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field label {
   font-family: var(--font-mono);

@@ -79,9 +79,9 @@ DEFAULT_LAYOUT = [
     "..1.##.2..",  # 1: back straight — safe checkpoint cells + chicane gap
     ".##....##.",  # 2: chicane apex
     ".########M",  # 3: gravel run-off on the right-hand straight
-    ".########.",  # 4
+    "O########O",  # 4: oil slicks on the outer-loop straights (slippery, survivable)
     "M########.",  # 5: gravel run-off on the left-hand straight
-    ".########.",  # 6
+    ".########O",  # 6: another oil slick on the right-hand straight
     ".XXXXXXXX.",  # 7: crash barriers — the cliff
     "SRRR1RR2RF",  # 8: main straight (R = racing line) + risky checkpoints
     "##########",  # 9: grass run-off (bottom)
@@ -118,7 +118,6 @@ def _parse_layout(layout: List[str]) -> Dict:
                 mud.add(cell)
             elif ch == "O":
                 oil.add(cell)
-                shortcut.add(cell)
             elif ch == "R":
                 shortcut.add(cell)
             elif ch == "X":
@@ -148,9 +147,10 @@ def racing_layout_stats(layout: List[str]) -> Dict[str, object]:
     start, finish = parsed["start"], parsed["finish"]
 
     short = shortest_path(walls | crash, start, finish, rows, cols)
-    # the "safe" line avoids oil AND the barrier-hugging racing line itself
+    # the "safe" line avoids the barrier-hugging racing line itself (oil is
+    # survivable now — a slip there bounces off the grass, it does not crash)
     safe = shortest_path(walls, start, finish, rows, cols,
-                         extra_blocked=oil | crash | parsed["shortcut"])
+                         extra_blocked=crash | parsed["shortcut"])
     short_len = path_length(short)
     safe_len = path_length(safe)
     return {
@@ -167,7 +167,7 @@ def racing_layout_stats(layout: List[str]) -> Dict[str, object]:
 
 def generate_racing_layout(
     seed: int = 0,
-    n_oil: int = 0,
+    n_oil: int = 3,
     n_mud: int = 2,
     n_gates: int = 2,
     n_crash: int = 10,         # kept for signature compat; the barrier line is structural
@@ -210,14 +210,30 @@ def generate_racing_layout(
             layout[back_row][col] = str(gi)
 
     # gravel run-off on the two vertical straights (cols 0 and N-1)
+    mud_slots = [(r, c) for c in (0, N - 1)
+                 for r in range(back_row + 2, express_row - 1)]
+    rng.shuffle(mud_slots)
     placed = 0
-    for c in (0, N - 1):
+    for r, c in mud_slots:
         if placed >= n_mud:
             break
-        r = rng.randint(back_row + 2, express_row - 1)
         if layout[r][c] == ".":
             layout[r][c] = "M"
             placed += 1
+
+    # oil slicks on the outer-loop straights. A slip on oil bounces off the
+    # grass run-off (survivable) — only the barrier line crashes — so oil is a
+    # visible, slowing hazard on the safe route, not an instant-death trap.
+    oil_slots = [(r, c) for c in (0, N - 1)
+                 for r in range(back_row + 2, express_row - 1)]
+    rng.shuffle(oil_slots)
+    placed_oil = 0
+    for r, c in oil_slots:
+        if placed_oil >= n_oil:
+            break
+        if layout[r][c] == ".":
+            layout[r][c] = "O"
+            placed_oil += 1
 
     result = ["".join(row) for row in layout]
 
@@ -227,7 +243,7 @@ def generate_racing_layout(
     blocked = parsed["walls"] | parsed["crash"]
     express = path_length(shortest_path(blocked, parsed["start"], parsed["finish"], N, N))
     safe = path_length(shortest_path(blocked, parsed["start"], parsed["finish"], N, N,
-                                     extra_blocked=parsed["shortcut"] | parsed["oil"]))
+                                     extra_blocked=parsed["shortcut"]))
     if express is None or safe is None or safe < express + 6:
         return [row[:] for row in DEFAULT_LAYOUT]
     return result
@@ -246,6 +262,7 @@ class RacingEnv:
         r_crash: float = -200.0,
         r_offtrack: float = -30.0,
         r_wall: float = -5.0,
+        r_slip: float = -5.0,
         r_finish_locked: float = -10.0,
         seed: int = None,
     ) -> None:
@@ -260,6 +277,7 @@ class RacingEnv:
         self.r_crash = r_crash
         self.r_offtrack = r_offtrack
         self.r_wall = r_wall
+        self.r_slip = r_slip
         self.r_finish_locked = r_finish_locked
         self.max_steps = max_steps
         self.rng = random.Random(seed)
@@ -294,10 +312,12 @@ class RacingEnv:
         reward = self.r_step
         self.steps += 1
 
-        if (slipped and hit_wall) or (ncell in self.crash):
+        # Only the crash BARRIERS end the race (the "cliff"). Oil that slides the
+        # car into the grass run-off makes it lose control and bounce — costly,
+        # but survivable — so oil is a real hazard without being instant death.
+        if ncell in self.crash:
             reward += self.r_crash
-            if ncell in self.crash:
-                self.pos = ncell
+            self.pos = ncell
             info = {
                 "slipped": slipped,
                 "crash": True,
@@ -305,6 +325,9 @@ class RacingEnv:
                 "shortcut": self.pos in self.shortcut_cells,
             }
             return (self.pos, self.next_cp), reward, True, info
+
+        if slipped:
+            reward += self.r_slip          # oil made the car lose grip
 
         checkpoint = False
         if hit_wall:

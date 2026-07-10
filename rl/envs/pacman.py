@@ -35,31 +35,38 @@ from rl.envs.grid_base import ACTIONS, GridBase
 Cell = Tuple[int, int]
 
 # Default maze.  '#'=wall  '.'=floor  'S'=start  'D'=door  'o'=coin  '~'=ice
+#   'A'=guard start.  Designed so there are TWO independent routes from start to
+#   door (a verified cycle) and the exit has two open approaches — the guard can
+#   no longer trap the agent by camping the single doorway, and the agent can
+#   choose its lane. The guard starts DEAD CENTRE so a chasing guard pressures
+#   the agent from the very first move.
 DEFAULT_LAYOUT = [
-    "S....#...o",
-    ".###.#.##.",
-    ".#o..#...." ,
-    ".#.#.##.#.",
-    "...#~~..#.",
-    ".#.#~#.#..",
-    ".#...#.#.o",
-    "..o#.#.#.#",
-    "#..#...#..",
-    ".#...##..D",
+    "S.o#######",
+    "....##..o#",
+    ".##.###..#",
+    "..#.~##.##",
+    "..~#A.#.##",
+    "#..##.~...",
+    "..o.#####.",
+    "##.~#####.",
+    "##....o...",
+    "######...D",
 ]
 
 
+# Same wall skeleton as DEFAULT_LAYOUT (items stripped) — the generator reuses
+# these corridors and scatters coins / ice / guard on top.
 PACMAN_BASE_LAYOUT = [
-    "S....#....",
-    ".###.#.##.",
-    ".#...#....",
-    ".#.#.##.#.",
-    "...#....#.",
-    ".#.#.#.#..",
-    ".#...#.#..",
-    "...#.#.#.#",
-    "#..#...#..",
-    ".#...##..D",
+    "S..#######",
+    "....##...#",
+    ".##.###..#",
+    "..#..##.##",
+    "...#..#.##",
+    "#..##.....",
+    "....#####.",
+    "##..#####.",
+    "##........",
+    "######...D",
 ]
 
 
@@ -96,10 +103,11 @@ def generate_pacman_layout(
         _put(layout, cell, "~")
 
     if guard_enabled:
-        guard_pool = [
-            c for c in free
-            if c not in safe and abs(c[0] - start[0]) + abs(c[1] - start[1]) >= 8
-        ] or [c for c in free if c not in safe]
+        # start the guard near the middle of the maze so a chasing guard is a
+        # threat from the first move (not parked next to the exit)
+        central = [c for c in free
+                   if c not in safe and 3 <= c[0] <= 6 and 3 <= c[1] <= 6]
+        guard_pool = central or [c for c in free if c not in safe]
         if guard_pool:
             _put(layout, rng.choice(guard_pool), "A")
 

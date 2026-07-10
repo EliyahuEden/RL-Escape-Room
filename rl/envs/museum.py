@@ -222,87 +222,95 @@ def generate_museum_layout(
     gives a different diamond location, camera placement, trap positions,
     guard patrols, and slippery marble tiles.
 
-    Since one camera sighting now triggers a rest-of-episode manhunt, every
-    generated heist is **verified to have a camera/trap-free route**
-    (start → diamond → exit); layouts are re-rolled — with progressively
-    fewer cameras — until one exists.
+    The **requested item counts are honoured**. Since one camera sighting now
+    triggers a rest-of-episode manhunt, every heist is verified to have a route
+    free of the *static* hazards (cameras + traps). We re-roll the **placement**
+    (never the counts) many times to find such a route — first also keeping
+    clear of the guards' full patrol lanes, then, if that is too tight, only of
+    their start cells (guards move, so a route past them is still winnable).
+    Counts are eased **only as a last resort**, if no placement of the exact
+    requested items admits a stealth route at all.
     """
     rng = random.Random(seed)
     R = C = 10
     start = (R - 1, 0)
     exit_cell = (R - 1, C - 1)
+    walls = _parse_layout(MUSEUM_BASE_LAYOUT)["walls"]
+    free_all = [(r, c) for r in range(R) for c in range(C)
+                if (r, c) not in walls and (r, c) != start and (r, c) != exit_cell]
 
-    base = _parse_layout(MUSEUM_BASE_LAYOUT)
-    walls = base["walls"]
-
-    for attempt in range(60):
-        # every 15 failed attempts, ease off one camera
-        cams_now = max(3, n_cameras - attempt // 15)
+    def attempt(cams_now, traps_now, guards_now, avoid_guard_routes):
+        """One placement of the given counts; returns a layout iff a stealth
+        route exists, else None (so the caller re-rolls the placement)."""
         layout = [list(row) for row in MUSEUM_BASE_LAYOUT]
-
-        free = [
-            (r, c) for r in range(R) for c in range(C)
-            if (r, c) not in walls and (r, c) != start and (r, c) != exit_cell
-        ]
-
-        vault_cells = [(r, c) for r, c in free if r <= 1]
-        diamond = rng.choice(vault_cells) if vault_cells else free[0]
+        vault_cells = [(r, c) for r, c in free_all if r <= 1]
+        diamond = rng.choice(vault_cells) if vault_cells else free_all[0]
         _put(layout, diamond, "G")
         reserved = {start, exit_cell, diamond}
-
-        placeable = [c for c in free if c not in reserved]
+        placeable = [c for c in free_all if c not in reserved]
         rng.shuffle(placeable)
 
         path_sd = shortest_path(walls, start, diamond, R, C)
         path_de = shortest_path(walls, diamond, exit_cell, R, C)
-        on_path = set(path_sd or []) | set(path_de or []) if path_sd and path_de else set()
-        on_path -= reserved
-
+        on_path = ((set(path_sd or []) | set(path_de or [])) - reserved
+                   if path_sd and path_de else set())
         near_path = [c for c in placeable if c in on_path]
         off_path = [c for c in placeable if c not in on_path]
 
-        cameras_placed: List[Cell] = []
-        for cell in near_path[:cams_now]:
-            _put(layout, cell, "V")
-            cameras_placed.append(cell)
-        remaining_cam = cams_now - len(cameras_placed)
-        if remaining_cam > 0:
-            for cell in off_path[:remaining_cam]:
-                _put(layout, cell, "V")
-                cameras_placed.append(cell)
-                off_path = off_path[1:]
-
-        used = set(cameras_placed)
+        # cameras go on the direct route first (forcing a detour), rest off it
+        on_cams = near_path[:cams_now]
+        cameras = on_cams + off_path[:max(0, cams_now - len(on_cams))]
+        used = set(cameras)
         trap_pool = [c for c in near_path if c not in used]
         rng.shuffle(trap_pool)
-        for cell in trap_pool[:n_traps]:
-            _put(layout, cell, "T")
-            used.add(cell)
-
+        traps = trap_pool[:traps_now]
+        used |= set(traps)
         guard_pool = [c for c in placeable if c not in used and c not in on_path]
         rng.shuffle(guard_pool)
-        for cell in guard_pool[:n_guards]:
+        guards = guard_pool[:guards_now]
+        used |= set(guards)
+        for cell in cameras:
+            _put(layout, cell, "V")
+        for cell in traps:
+            _put(layout, cell, "T")
+        for cell in guards:
             _put(layout, cell, "P")
-            used.add(cell)
-
         slip_pool = [c for c in placeable if c not in used]
         rng.shuffle(slip_pool)
         for cell in slip_pool[:n_slippery]:
             _put(layout, cell, "~")
 
-        # a stealth route must exist: both heist legs passable without
-        # stepping into a camera zone, a laser trap, or a guard patrol lane
-        guard_cells: Set[Cell] = set()
-        for gcell in guard_pool[:n_guards]:
-            guard_cells.update(museum_guard_route(gcell, walls, exit_cell, R, C))
-        avoid = (set(cameras_placed) | set(trap_pool[:n_traps]) | guard_cells)
-        avoid -= {start, diamond, exit_cell}
-        ok_sd = shortest_path(walls, start, diamond, R, C, extra_blocked=avoid)
-        ok_de = shortest_path(walls, diamond, exit_cell, R, C, extra_blocked=avoid)
-        if ok_sd and ok_de:
+        # a stealth route must dodge the static hazards; optionally also the
+        # guards' full patrol lanes (conservative) rather than just their starts
+        if avoid_guard_routes:
+            guard_cells: Set[Cell] = set()
+            for g in guards:
+                guard_cells.update(museum_guard_route(g, walls, exit_cell, R, C))
+        else:
+            guard_cells = set(guards)
+        avoid = (set(cameras) | set(traps) | guard_cells) - {start, diamond, exit_cell}
+        if (shortest_path(walls, start, diamond, R, C, extra_blocked=avoid)
+                and shortest_path(walls, diamond, exit_cell, R, C, extra_blocked=avoid)):
             return ["".join(row) for row in layout]
+        return None
 
-    return list(DEFAULT_LAYOUT)  # extremely unlucky seed: curated fallback
+    # honour the EXACT requested counts. The check keeps the guards' full patrol
+    # lanes off the stealth route (not just their start cells) so the heist is
+    # genuinely winnable, not merely route-exists-on-paper — re-roll the
+    # placement many times to satisfy it at the requested counts.
+    for _ in range(600):
+        got = attempt(n_cameras, n_traps, n_guards, avoid_guard_routes=True)
+        if got is not None:
+            return got
+    # last resort only: ease the counts (still winnability-checked) if no
+    # placement of the exact items leaves a guard-free escape corridor at all
+    for i in range(120):
+        ease = i // 12 + 1
+        got = attempt(max(3, n_cameras - ease), max(0, n_traps - (ease + 1) // 2),
+                      max(0, n_guards - (ease + 1) // 2), avoid_guard_routes=True)
+        if got is not None:
+            return got
+    return list(DEFAULT_LAYOUT)  # pathological counts: curated fallback
 
 
 class MuseumEnv:

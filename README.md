@@ -162,6 +162,13 @@ greedy evaluation episode — enough to *see* learning without gigabytes of JSON
 * **Terminal** standing on the door with all coins collected (or caught by the guard).
 * **Dynamics** ice tiles deflect the move sideways with probability `slip_prob` — the stochastic
   transitions are part of the *known* model handed to Value/Policy Iteration.
+* **The maze** there are **two independent routes** to the exit and the door has **two open
+  approaches**, so a guard can no longer trap the agent by camping the single doorway. The guard
+  starts in the **centre** and, in **chase** mode (the default), hunts the agent from the very
+  first move — its cell joins the DP state. **Patrol** mode walks a fixed loop with a far smaller
+  state space, and **guard speed** is adjustable (a faster chaser costs no extra states).
+* **Difficulty** on a generated map you control the **coin** and **ice** counts; each coin
+  doubles the DP state space, so with a chasing guard keep coins modest (patrol mode is cheap).
 * **What to look at** the Bellman residual Δ dropping (log chart), and the Policy tab: the value
   landscape flips completely between "coins left" and "all collected".
 
@@ -179,8 +186,10 @@ greedy evaluation episode — enough to *see* learning without gigabytes of JSON
 
 ### Room 3 — Grand Prix · Q-Learning **vs a SARSA rival**
 * **The circuit** a proper F1-style ribbon on a **10×10 grid** — a grass infield ringed by the
-  track, red/white kerbs, a wall of TecPro crash barriers, a **chicane** on the back straight and
-  gravel run-off. Your Q-Learning car races a SARSA rival trained on the identical circuit with
+  track, red/white kerbs, a wall of TecPro crash barriers, a **chicane** on the back straight,
+  gravel run-off and **iridescent oil slicks** on the outer-loop straights (slippery — a slip
+  slides the car sideways and costs time, but only the barriers crash). Your Q-Learning car
+  races a SARSA rival trained on the identical circuit with
   identical hyperparameters. The lap has **checkpoint gates** (cross 1, then 2, then the finish
   opens) and every gate exists twice — once on each route — so both are full laps.
 * **The two lines** it's *cliff walking* staged as a Grand Prix: the **main straight** (9 steps)
@@ -189,7 +198,7 @@ greedy evaluation episode — enough to *see* learning without gigabytes of JSON
   steps), nowhere near anything terminal.
 * **State** `(cell, next-checkpoint)` per car — each tracks its own lap progress.
 * **Rewards** step −1 · checkpoint +40 · finish +200 · crash −200 (terminal) · gravel −5 ·
-  locked-finish bump −10 · off-track penalties. First car home wins the race.
+  oil-slip −5 · locked-finish bump −10 · off-track penalties. First car home wins the race.
 * **Why it works** Q-Learning's off-policy max-target ignores its own exploration accidents and
   learns the barrier-hugging main straight; SARSA's on-policy target prices every ε-wobble into
   the barriers and settles on the safe outer loop. Same table, same settings — the race verdict
@@ -243,9 +252,9 @@ these are what run:
 | **1 Pacman · Value Iteration** | γ 0.95 · θ 1e-4 · ≤250 sweeps · slip 0.2 | **optimal policy** (DP is exact) |
 | **2 Museum · SARSA** | α 0.1 · γ 0.95 · ε 1.0→0.05 (×0.995/ep) · 2000 ep · slip 0.1 | **~96%** escape |
 | **3 Racing · Q-Learning** | α 0.2 · γ 0.95 · ε 1.0→**0.15** (kept high on purpose) · 1200 ep · slip 0.2 | **beats SARSA 100%**, 9-step lap |
-| **4 Football — match · DQN** | lr 5e-4 · γ 0.98 · expl 0.65 · batch 128 · 800 ep · 3 defenders | **~68%** goals |
-| **4 Football — free kick · DQN** | same DQN · `kick_spot=random` · dynamic wall (2–5) | **~65%** single-kick |
-| **5 Cross the Road · DQN** | lr 1e-3 · γ 0.99 · expl 0.5 · batch 64 · 600 ep · 14 cars | **~50–65%** crossing |
+| **4 Football — match · DQN** | lr 5e-4 · γ 0.98 · expl 0.65 · batch 128 · 900 ep · 3 defenders | **~63%** goals |
+| **4 Football — free kick · DQN** | same DQN · `kick_spot=random` · dynamic wall (2–5) | **~67%** single-kick |
+| **5 Cross the Road · DQN** | lr 1e-3 · γ 0.99 · expl 0.5 · batch 64 · 900 ep · 14 cars | **~67%** crossing |
 
 Notes: Room 3 keeps a high minimum ε (0.15) so the on-policy/off-policy split survives; the
 DQN rooms use a 128×128 MLP with a 50 000-step replay buffer and a target net refreshed every
@@ -257,9 +266,15 @@ control implies, since each episode is a single step.
 Every control in the UI comes from the backend schema in `backend/training/train.py`:
 
 * **DP (Room 1):** method (value/policy iteration), γ, convergence threshold θ, max iterations,
-  evaluation episodes, map source/seed, slip probability, guard on/off + behaviour.
-* **SARSA / Q-Learning (Rooms 2–3):** α, γ, ε start / min / decay, episodes, max steps,
-  slip probability, map source/seed (+ alarm toggle in Room 2).
+  evaluation episodes, slip probability, guard on/off + **behaviour (chase / patrol) + speed**,
+  and — for generated maps — **coin** and **ice** counts.
+* **SARSA / Q-Learning (Rooms 2–3):** α, γ, ε start / min / decay, episodes, max steps, slip
+  probability (+ alarm toggle in Room 2), and generated-map difficulty counts — **cameras,
+  laser traps, patrol guards, marble tiles** (Room 2); **oil slicks, gravel, checkpoints** (Room 3).
+* **Map studio (Rooms 1–3):** each grid room has a live map preview and a **🎲 New random
+  layout** button — adjust the difficulty counts (marked ◇), watch the generated map update in
+  the preview, then train on it. The generators keep every map solvable (Room 1 guarantees two
+  routes to the exit; Room 2 verifies a stealth route; Room 3 keeps the express/safe contrast).
 * **DQN (Rooms 4–5):** learning rate, γ, ε start / min, exploration fraction, batch size,
   replay buffer size, target-network update frequency, episodes, max steps
   (+ mode / free-kick spot / defenders / keeper speed in Room 4;

@@ -634,20 +634,38 @@ export function renderRacing(ctx, W, H, scene) {
     ctx.restore();
   });
 
-  // oil slicks
+  // oil slicks — an iridescent purple puddle with a shifting rainbow sheen and
+  // a bright rim, so it clearly reads on the dark asphalt (no more black-on-black)
   (layout.oil || []).forEach(([r, c]) => {
     const x = g.cx(c);
     const y = g.cy(r);
+    const rad = g.cell * 0.42;
     ctx.save();
-    ctx.fillStyle = 'rgba(8,8,14,0.92)';
+    const grad = ctx.createRadialGradient(x - rad * 0.3, y - rad * 0.3, rad * 0.1, x, y, rad);
+    grad.addColorStop(0, 'rgba(150, 110, 225, 0.95)');
+    grad.addColorStop(0.55, 'rgba(78, 52, 140, 0.9)');
+    grad.addColorStop(1, 'rgba(24, 16, 46, 0.88)');
+    ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.ellipse(x, y, g.cell * 0.38, g.cell * 0.27, 0.5, 0, Math.PI * 2);
+    ctx.ellipse(x, y, rad, g.cell * 0.32, 0.5, 0, Math.PI * 2);
     ctx.fill();
-    const sh = 0.4 + 0.3 * Math.sin(timeMs / 700 + c);
-    ctx.strokeStyle = `rgba(120,190,255,${sh * 0.4})`;
-    ctx.lineWidth = 1.4;
+    // animated rainbow sheen streaks
+    const t = timeMs / 600 + c * 1.3 + r;
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 3; i++) {
+      const hue = (t * 40 + i * 120) % 360;
+      ctx.strokeStyle = `hsla(${hue}, 90%, 68%, 0.4)`;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.ellipse(x + Math.sin(t + i) * 2, y + Math.cos(t + i) * 1.5,
+                  rad * (0.28 + 0.2 * i), g.cell * (0.1 + 0.08 * i), 0.5 + i, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = 'rgba(190, 215, 255, 0.55)';
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
-    ctx.ellipse(x - 3, y - 2, g.cell * 0.16, g.cell * 0.08, 0.5, 0, Math.PI * 2);
+    ctx.ellipse(x, y, rad, g.cell * 0.32, 0.5, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
   });
