@@ -312,20 +312,3 @@ From the UI: room page → TRAIN → START TRAINING. From the CLI:
 ```bash
 python -m backend.training.train --room 3 --set episodes=1500 alpha=0.15
 ```
-
-## What changed vs. the original project (frontend upgrade)
-
-* The original Streamlit dashboard is replaced by a **React + Vite website** with an arcade
-  design system (dark + light themes), per-room accents, HUD navigation and page transitions.
-* Every room is rendered as a **living HTML5 Canvas game**: neon Pacman maze with animated
-  mouth and ghost guard; museum with camera sweeps, laser traps and alarm mode; street circuit
-  F1 circuit with a grass infield, red/white kerbs, TecPro barriers, a chicane and a checkered
-  finish; football pitch with physical ball
-  flights; multi-lane traffic with a live sensor radar.
-* **Live training dashboard** — background training jobs stream downsampled metric series to
-  Recharts graphs while the run is still going, with progress bar and stop control.
-* **Episode replay system** — JSON replays with full transport controls and a state monitor.
-* **Policy visualisation** — value heatmap + greedy arrows per room flag (rooms 1–3).
-* **Results page** — cross-room comparison table and charts.
-* **The RL logic did not change** — same environments, states, rewards, algorithms and
-  training behaviour as the original `rl/` package.
