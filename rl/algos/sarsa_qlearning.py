@@ -116,12 +116,20 @@ def train(
             for k in count_labels:
                 if info.get(k):
                     ep_counts[k] += 1
+            # ── The ONE line that separates the two algorithms: the TD target ──
             if algo == "sarsa":
+                # SARSA — ON-policy: bootstrap from the action we ACTUALLY take
+                # next (a' ~ ε-greedy), so the cost of future exploration is
+                # priced into Q → it learns a cautious policy.
                 naction = eps_greedy(Q[nstate], eps, rng)
                 target = reward + (0.0 if done else gamma * Q[nstate][naction])
             else:  # qlearning
+                # Q-LEARNING — OFF-policy: bootstrap from the BEST next action
+                # (max_a Q), ignoring our own exploration, so it learns the
+                # optimal greedy policy no matter how we behave.
                 target = reward + (0.0 if done else gamma * float(np.max(Q[nstate])))
                 naction = eps_greedy(Q[nstate], eps, rng)
+            # TD update: nudge Q(s,a) a fraction α toward the target (= TD error)
             td = target - Q[state][action]
             Q[state][action] += alpha * td
             td_abs += abs(td)

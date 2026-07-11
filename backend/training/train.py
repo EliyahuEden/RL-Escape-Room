@@ -1,4 +1,5 @@
-"""Training orchestration for the five rooms.
+"""Training orchestration for the five rooms — the bridge between the web
+layer and the RL core in ``rl/``.
 
 This module owns the room **registry** (metadata + hyperparameter schemas
 that the frontend renders as controls) and one trainer per algorithm
@@ -6,6 +7,18 @@ family.  The trainers call the *existing* algorithms in ``rl/algos``
 unchanged — replays are captured by wrapping the environment
 (:class:`~backend.training.replay_recorder.RecordingEnv`), and metrics
 come from the :class:`rl.utils.TrainResult` the algorithms already build.
+
+MAP OF THIS FILE (jump by searching the ``# ===`` banners below)
+    • Hyperparameter schemas ... _p / _td_params / _dqn_params + the ROOMS
+      registry — every control the UI shows, per room, with its default.
+    • Environment construction . make_env(room_id, params) — builds the right
+      rl/envs environment from the params (where each room is wired up).
+    • Shared greedy evaluation . run_greedy_eval — greedy success rate + replays.
+    • Room 3 race evaluation ... run_race_eval — Q-Learning vs the SARSA rival.
+    • ROOM 1 — Dynamic Programming . train_room1    → rl/algos/dp.py
+    • ROOMS 2 & 3 — TD control ..... train_td       → rl/algos/sarsa_qlearning.py
+    • ROOMS 4 & 5 — DQN ............ train_dqn_room  → rl/algos/dqn.py
+    • Dispatch ................. run_training(room_id, …) picks the trainer.
 
 CLI (every algorithm can be tested independently)::
 
@@ -21,7 +34,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from rl.algos import dp as dp_mod
-from rl.algos import td_core
+from rl.algos import sarsa_qlearning
 from rl.algos import dqn as dqn_mod
 from rl.envs.museum import DEFAULT_LAYOUT as MUSEUM_DEFAULT, MuseumEnv, generate_museum_layout
 from rl.envs.obstacles import ObstacleEnv
@@ -681,7 +694,7 @@ def train_td(room_id: int, params: dict, progress=None, stop=None) -> dict:
 
     stopped = False
     try:
-        result = td_core.train(
+        result = sarsa_qlearning.train(
             wrapped, algo="sarsa" if room_id == 2 else "qlearning",
             episodes=params["episodes"], alpha=params["alpha"],
             gamma=params["gamma"], eps_start=params["eps_start"],
@@ -738,7 +751,7 @@ def train_td(room_id: int, params: dict, progress=None, stop=None) -> dict:
             # finishes AND takes the safe detour (the intended contrast). Each
             # retry is a full but fast tabular train, so we can afford plenty.
             for attempt in range(10):
-                rival_result = td_core.train(
+                rival_result = sarsa_qlearning.train(
                     make_env(3, params), algo="sarsa",
                     episodes=params["episodes"], alpha=params["alpha"],
                     gamma=params["gamma"], eps_start=params["eps_start"],

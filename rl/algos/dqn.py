@@ -171,10 +171,15 @@ def train(
                 ba = torch.as_tensor(ba, device=device)
                 br = torch.as_tensor(br, device=device)
                 bd = torch.as_tensor(bd, device=device)
+                # predicted Q(s,a) from the ONLINE net for the actions taken
                 q_sa = online(bo).gather(1, ba.unsqueeze(1)).squeeze(1)
                 with torch.no_grad():
+                    # TD target r + γ·max_a Q(s',a) from the FROZEN target net
+                    # (a slowly-synced copy → stable targets); (1 − done) zeroes
+                    # the bootstrap on terminal transitions.
                     q_next = target(bno).max(1).values
                     tgt = br + gamma * q_next * (1.0 - bd)
+                # Huber (smooth-L1) loss: robust to the occasional large TD error
                 loss = F.smooth_l1_loss(q_sa, tgt)
                 opt.zero_grad()
                 loss.backward()

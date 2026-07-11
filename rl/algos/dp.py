@@ -74,14 +74,16 @@ def value_iteration(mdp: TabularMDP, gamma: float = 0.95, theta: float = 1e-4,
             if mdp.is_terminal(s):
                 policy[s] = default_a
                 continue
+            # Bellman optimality backup: V(s) ← max_a Σ P(s'|s,a)·[r + γ·V(s')]
+            # (the model P is KNOWN, so no sampling — we sweep every action).
             best_a, best_q = default_a, float("-inf")
             for a in mdp.actions:
-                q = _q_value(mdp, V, s, a, gamma)
+                q = _q_value(mdp, V, s, a, gamma)  # Q(s,a) under the known model
                 if q > best_q:
                     best_q, best_a = q, a
-            delta = max(delta, abs(V[s] - best_q))
+            delta = max(delta, abs(V[s] - best_q))  # track convergence (residual)
             V[s] = best_q
-            policy[s] = best_a
+            policy[s] = best_a  # greedy action captured in the same sweep
         diag["value_delta"].append(delta)
         diag["start_value"].append(V[mdp.start])
         if prev_policy is not None:
