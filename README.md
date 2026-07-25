@@ -2,6 +2,11 @@
 
 **Five themed escape rooms · five reinforcement-learning algorithms · one interactive game website.**
 
+**🌐 Live site:** **[rl-escape-room.onrender.com](https://rl-escape-room.onrender.com)** — the app
+running online (free Render instance: the first load after it has been idle can take up to a
+minute to wake up, and every wake starts with fresh, untrained rooms — training data is
+session-only by design).
+
 An agent is locked inside five rooms — a Pacman maze, a museum heist, a street race, a football
 final and a deadly road crossing. Each room is a different RL problem solved by a different
 algorithm, and the whole project runs as a real web app: a **Python (FastAPI) backend** that
